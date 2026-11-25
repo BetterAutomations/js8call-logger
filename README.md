@@ -226,6 +226,7 @@ Commands
 | `js8call-logger dial [FREQ] [--offset HZ] [--clear]` | show or set the dial stamped on new lines; `7078`, `7078.00`, `7.078` and `7.078MHz` all work |
 | `js8call-logger tune [--dial HZ] [--channel N]` | lower-level: dial and channel settings straight to one decoder |
 | `js8call-logger prune [--days N] [--dry-run] [--delete]` | archive (or delete) logs older than N days |
+| `js8call-logger migrate [--dry-run]` | fold legacy flat `GROUP*.txt` conversation files into `conversations/groups/` |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 
 Many stations at once
@@ -308,7 +309,10 @@ Logs
   file and the group file, because "who said it" and "where it was said" are
   different questions; heartbeats appear in neither. Group names are
   uppercased and stripped of punctuation, so `@GHOST-NET` becomes
-  `groups/GHOSTNET.txt`.
+  `groups/GHOSTNET.txt`. Version 0.2 wrote one flat `GROUPALLCALL.txt`
+  instead; `js8call-logger migrate` folds those into `groups/` in date order,
+  drops duplicates, and removes the old file once the new one is written. Stop
+  the logger first.
 
 Heartbeats (`@HB`, `HB FN42`) are most of JS8 traffic. They are left out of
 the text files and of `tail -f` by default, and always kept in the JSONL and

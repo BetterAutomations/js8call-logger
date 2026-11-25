@@ -16,7 +16,7 @@ import sys
 import time
 
 from . import __version__
-from . import api, clock, config, engine, pulse, records, retention
+from . import api, clock, config, engine, migrate, pulse, records, retention
 
 APP = config.APP
 _STOP = {"now": False}
@@ -584,6 +584,18 @@ def cmd_dial(args):
     return 0
 
 
+def cmd_migrate(args):
+    """Fold legacy flat GROUP*.txt conversation files into groups/."""
+    p = config.ensure_dirs()
+    if engine.read_pid(p) and engine._alive(engine.read_pid(p)) and not args.force:
+        print("the logger is running; stop it first, or use --force "
+              "(a running daemon holds the conversation files open)")
+        return 2
+    report = migrate.fold_legacy_groups(p, dry_run=args.dry_run)
+    print(migrate.report_text(report, args.dry_run))
+    return 0
+
+
 def cmd_prune(args):
     """Archive (or delete) logs older than N days. Off unless asked."""
     p = config.ensure_dirs()
@@ -979,6 +991,13 @@ def build_parser():
     sp.add_argument("--channel", type=int, default=1,
                     help="which decoder (default 1)")
     sp.set_defaults(func=cmd_tune)
+
+    sp = sub.add_parser("migrate",
+                        help="fold legacy GROUP*.txt files into conversations/groups/")
+    sp.add_argument("--dry-run", action="store_true", help="say what would move")
+    sp.add_argument("--force", action="store_true",
+                    help="allow it while the logger is running")
+    sp.set_defaults(func=cmd_migrate)
 
     sp = sub.add_parser("prune", help="archive or delete logs older than N days")
     sp.add_argument("--days", type=int, help="age in days (default: retention_days)")
