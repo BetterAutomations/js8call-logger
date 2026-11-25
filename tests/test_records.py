@@ -28,6 +28,7 @@ class RenderTest(unittest.TestCase):
         self.assertIn("14.078MHz", lines[0])
         self.assertIn("snr= +33", lines[0])
         self.assertIn("coh=100", lines[0])
+        self.assertIn("1500Hz", lines[0])
         self.assertIn("N0CALL", lines[0])
         self.assertTrue(lines[0].endswith("CQ CQ CQ EM48"))
 
@@ -39,9 +40,10 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(len(cols), 1, cols)
 
     def test_unknown_fields_are_dashes(self):
-        line = records.render(rec(dial=None, snr=None))[0]
+        line = records.render(rec(dial=None, snr=None, offset=None))[0]
         self.assertIn("---MHz", line)
         self.assertIn("snr=  --", line)
+        self.assertIn("  -Hz", line)
 
     def test_coherence_lands_in_the_record(self):
         r = rec(text="CQ CQ CQ EM48")

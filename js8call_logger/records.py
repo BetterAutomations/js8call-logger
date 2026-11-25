@@ -178,8 +178,10 @@ def _prefix(rec: dict) -> str:
     ch_s = ""
     if (rec.get("channels_total") or 1) > 1 and rec.get("channel"):
         ch_s = f"ch{rec['channel']}"
+    off = rec.get("offset")
+    tone_s = f"{off:4d}Hz" if isinstance(off, int) else "   -Hz"
     who = (rec.get("src") or "?")[:9]
-    return f"{rec['ts']}  [{dial_s} {snr_s} {coh_s} {ch_s:>4} {who:<9}]  "
+    return f"{rec['ts']}  [{dial_s} {snr_s} {coh_s} {ch_s:>4} {tone_s} {who:<9}]  "
 
 
 def render(rec: dict, width: int = 150) -> list[str]:

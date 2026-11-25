@@ -92,12 +92,22 @@ else
     decoder=
 fi
 
-# Launcher that knows where it lives.
-$sudo tee "$bindir/js8call-logger" >/dev/null <<EOF
-#!/bin/sh
-PYTHONPATH="$dest\${PYTHONPATH:+:\$PYTHONPATH}" exec python3 -m js8call_logger.cli "\$@"
-EOF
-$sudo chmod 755 "$bindir/js8call-logger"
+# One real launcher, and a symlink where the shell looks. The launcher copied
+# above is self-locating (it puts its own directory on PYTHONPATH), so nothing
+# has to be generated per install, and /usr/local/bin holds a symlink rather
+# than a second copy of anything.
+$sudo chmod 755 "$dest/js8call-logger"
+$sudo ln -sfn "$dest/js8call-logger" "$bindir/js8call-logger"
+
+# Older versions of this script wrote a second launcher into <prefix>/bin; take
+# it out so there is exactly one file and one symlink.
+stale=$prefix/bin/js8call-logger
+if [ "$bindir" != "$prefix/bin" ] && [ -f "$stale" ] \
+        && grep -q js8call_logger "$stale" 2>/dev/null; then
+    $sudo rm -f "$stale"
+    $sudo rmdir "$prefix/bin" 2>/dev/null || true
+    echo "removed stale launcher $stale"
+fi
 
 # First-run config, only if the user has none yet.
 home=$data_home

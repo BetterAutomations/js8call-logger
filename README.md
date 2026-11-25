@@ -106,9 +106,11 @@ Install (offline)
     ./install.sh --prefix ~/.local     # user-local, no sudo
 
 `install.sh` copies the program, unpacks the bundled JS8Call AppImage with
-`--appimage-extract` (so no libfuse is needed), writes `js8call-logger` into
-`/usr/local/bin` for a system install (`<prefix>/bin` for a user-local one),
-and writes a first-run config pointing at the unpacked decoder. Nothing is
+`--appimage-extract` (so no libfuse is needed), and writes a first-run config
+pointing at the unpacked decoder. There is exactly one launcher, at
+`/opt/js8call-logger/js8call-logger`, with a **symlink** to it in
+`/usr/local/bin` (or `<prefix>/bin` for a `--prefix` install) — nothing is
+copied into two places. Nothing is
 downloaded. It ends by telling you if the command directory is not on your
 `PATH`.
 
@@ -235,7 +237,7 @@ port 2442, channel 2 on 2443, and so on. Each decoder has its own JS8Call
 config, its own log and its own waterfall. Records carry `channel`, and the
 text line gains a `ch2` tag so two bands can be told apart at a glance:
 
-    2026-11-25 08:31:57  [  7.078MHz snr= +33 coh=100  ch2 N0CALL   ]  ...
+    2026-11-25 08:31:57  [  7.078MHz snr= +33 coh=100  ch2 1500Hz N0CALL   ]  ...
 
 Route each receiver onto its own cable (`route-audio --index N --to 2`), and
 set the dial per channel with `tune --dial 14078000 --channel 2`. `cable down`
@@ -248,9 +250,9 @@ Logs
 `~/js8call-logger/logs/` (override with `JS8CALL_LOGGER_HOME`):
 
 * `js8call-logger-YYYY-MM-DD.txt` — one line per transmission, in fixed-width
-  fields so the text starts in the same column (67) on every line:
+  fields so the text starts in the same column (74) on every line:
 
-      2026-11-24 22:37:41  [  7.078MHz snr= +33 coh=100      N0CALL   ]  @ALLCALL CQ N0CALL: @ALLCALL CQ CQ CQ EM48
+      2026-11-24 22:37:41  [  7.078MHz snr= +33 coh=100      1500Hz N0CALL   ]  @ALLCALL CQ N0CALL: @ALLCALL CQ CQ CQ EM48
 
   | field | width | meaning |
   |---|---|---|
@@ -259,6 +261,7 @@ Logs
   | `snr=` | 8 | the decoder's signal report in dB, `--` when it reported none |
   | `coh=` | 7 | 0–100, how much of the text looks like real traffic |
   | channel | 4 | `ch2` when several decoders run, blank otherwise |
+  | tone | 6 | audio offset inside the passband, `-Hz` when unknown |
   | callsign | 9, left | sender, truncated past nine characters |
 
   `snr=` measures the **signal** and `coh=` the **text**: a strong carrier with

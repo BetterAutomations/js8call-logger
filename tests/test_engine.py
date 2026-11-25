@@ -54,7 +54,7 @@ class IniTest(unittest.TestCase):
 
 class ChannelTagTest(unittest.TestCase):
     BASE = {"ts": "2026-11-25 08:31:57", "dial": 7078000, "snr": 33,
-            "offset": 1500, "src": "N0CALL", "dst": "@ALLCALL",
+            "offset": 1500, "src": "N0CALL", "dst": "@ALLCALL",  # tone shown
             "text": "CQ CQ CQ EM48", "kind": "directed", "utc_ms": 1,
             "heartbeat": False}
 
