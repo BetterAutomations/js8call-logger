@@ -137,3 +137,38 @@ library only, so there are no wheels to bundle.
 `tests/fixtures/n0call-cq.raw` is a captured frame (48 kHz mono s16le) replayed
 by `selftest --live` at a 15 second boundary; it is what proves a fresh install
 end to end without a radio.
+
+Decode depth: what the refinement passes actually buy (2026-11-25)
+-----------------------------------------------------------------
+
+JS8Call's refinement passes are environment switches (JS8_DISABLE_*), so
+`tune --decoder` can A/B them against one fixture with white noise mixed in at
+a known in-band SNR. Calibration first, single frame, default profile:
+
+| injected SNR (2.5 kHz) | decode | decoder's reported SNR |
+|---|---|---|
+| -18 dB | yes | -22 dB |
+| -21 dB | yes | -26 dB |
+| -24 dB | no  | - |
+
+So the decode edge sits between -21 and -24 dB and the decoder reports about
+4 dB below what was injected. Sweep at the edge, 2 transmissions per level:
+
+| profile | passes off | decodes at -20 dB | decodes at -23 dB | cpu s / 15 s period |
+|---|---|---|---|---|
+| default | none | 2/2 | 0/2 | 0.84 |
+| lean    | deep_search, ldpc_rescue | 2/2 | 0/2 | 0.85 |
+| minimal | all six | 2/2 | 0/2 | 0.83 |
+
+Conclusion: on this machine and this fixture the passes cost about 2 % of a
+period's CPU and neither rescue the frame at -23 dB nor lose it at -20 dB.
+Defaults therefore stay as they are - all passes on. Disabling refinement on
+the strength of a 0.01 s/period difference would be superstition, and these
+passes exist for drift, partial frames and overlapping signals, which one
+clean fixture cannot reproduce.
+
+What it does tell us: 0.84 s of CPU per 15 s period is the decoder's floor
+here, and that is the number to scale for the Core 2 Duo target - roughly
+6-7 s per period if the old core is 8x slower, which is about half of one core
+and comfortably inside a dual-core budget. Real numbers for that machine come
+from running the same command there.

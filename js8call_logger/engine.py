@@ -212,6 +212,14 @@ class Decoder:
         env["XDG_DATA_HOME"] = os.path.join(root, "data")
         env["QT_QPA_PLATFORM"] = "offscreen"
         env.setdefault("QT_LOGGING_RULES", "")
+        # JS8Call exposes its refinement passes as environment switches, not
+        # settings keys; `tune --decoder` decides which ones earn their CPU.
+        for name, enabled in (self.cfg.get("decode_env") or {}).items():
+            key = "JS8_DISABLE_" + name.upper()
+            if enabled:
+                env.pop(key, None)
+            else:
+                env[key] = "1"
         os.makedirs(env["XDG_CONFIG_HOME"], exist_ok=True)
         os.makedirs(env["XDG_DATA_HOME"], exist_ok=True)
         write_ini(self.cfg, self.p, self.channel)

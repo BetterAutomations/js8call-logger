@@ -14,8 +14,10 @@ TUNING
   score candidates by decodes per minute, keep the best. Needs an SDR we can
   retune; useless for a WebSDR tap or a line input, where the receiver is the
   operator's.
-- Decode-depth / multi-decoder tuning: measure decodes per minute at each
-  setting and keep the best, the way morse-logger tunes WPM.
+- Decode-depth tuning is built (`tune --decoder`, see README and DESIGN), but
+  it was measured on one clean frame on a fast CPU: no difference between
+  profiles at the decode edge. Re-run it on the SU9300 against real signals
+  before trusting any of its verdicts there.
 - Input-level trimming with pactl set-source-volume: currently we only warn
   about clipping and a dead cable.
 

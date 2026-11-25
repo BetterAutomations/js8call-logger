@@ -46,6 +46,10 @@ DEFAULTS = {
     "snr_min_text": None,             # drop weaker lines from the text file
     "dedupe_grace_s": 2.0,            # window to collapse ACTIVITY/DIRECTED
     "retention_days": 0,              # 0 = keep everything; see `prune`
+    # Refinement passes; false sets JS8_DISABLE_<NAME> for the decoder.
+    "decode_env": {"deep_search": True, "ldpc_rescue": True,
+                   "coherent_data": True, "redemod": True,
+                   "freq_tracking": True, "timing_tracking": True},
     # clock
     "clock_apply": "log",             # "log" (A) or "system" (B, needs root)
     "clock_samples": 15,              # decodes to median before acting

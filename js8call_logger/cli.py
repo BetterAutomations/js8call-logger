@@ -16,7 +16,7 @@ import sys
 import time
 
 from . import __version__
-from . import api, clock, config, engine, migrate, pulse, records, retention
+from . import api, clock, config, engine, migrate, pulse, records, retention, tune
 
 APP = config.APP
 _STOP = {"now": False}
@@ -584,6 +584,68 @@ def cmd_dial(args):
     return 0
 
 
+def cmd_tune_decoder(args):
+    """Measure decodes against CPU for each decode-depth profile."""
+    p = config.ensure_dirs()
+    cfg = config.load()
+    levels = tuple(int(x) for x in str(args.levels).replace(" ", "").split(",") if x)
+    runs = max(1, int(args.runs))
+    if args.dry_run:
+        print("would test, in this order:")
+        for name in tune.PROFILES:
+            off = [k for k, v in tune.PROFILES[name].items() if not v]
+            print(f"  {name:<8} {'all passes on' if not off else 'off: ' + ', '.join(off)}")
+        print(f"levels       {', '.join(f'{lv:+d} dB' for lv in levels)}")
+        print(f"repetitions  {runs} per level, {runs * len(levels)} transmissions each")
+        print("cost         roughly {} min; the logger is stopped meanwhile".format(
+            max(1, round((len(tune.PROFILES) * (25 + 15 * runs * len(levels))) / 60))))
+        return 0
+
+    was_running = bool(engine.read_pid(p) and engine._alive(engine.read_pid(p)))
+    loops = list(cfg.get("source_loops") or [])
+    sf = os.path.join(p["run"], "pulse-modules.json")
+    if was_running:
+        print("stopping the logger for a clean measurement")
+        engine_rc = cmd_stop(argparse.Namespace())
+        if engine_rc not in (0, None):
+            return engine_rc
+    if loops:
+        # The share loop keeps playing live audio into the cable; the fixture
+        # would be decoded against that noise instead of against silence.
+        print(f"pausing {len(loops)} source loop(s) while measuring")
+        pulse.stop_source_loops(state_file=sf)
+    try:
+        results = tune.sweep(cfg, levels=levels, runs=runs)
+    finally:
+        for src in loops:
+            try:
+                pulse.loop_source(src, state_file=sf)
+            except pulse.PulseError as exc:
+                print(f"could not restore source loop {src}: {exc}")
+        if was_running:
+            cmd_start(argparse.Namespace(foreground=False, quiet=True))
+            print("logger started again")
+
+    print()
+    print(tune.table(results))
+    best = tune.pick(results)
+    if not best:
+        print("no results")
+        return 1
+    print()
+    print(f"winner       {best['profile']}")
+    if args.apply:
+        cfg["decode_env"] = {k: bool(best["passes"].get(k, True))
+                             for k in tune.PASSES}
+        config.save(cfg)
+        off = [k for k, v in cfg["decode_env"].items() if not v]
+        print("saved        decode_env" + (f" (off: {', '.join(off)})" if off else " (all on)"))
+        print("             applies at the next start")
+    else:
+        print("not saved    re-run with --apply to keep this profile")
+    return 0
+
+
 def cmd_migrate(args):
     """Fold legacy flat GROUP*.txt conversation files into groups/."""
     p = config.ensure_dirs()
@@ -614,6 +676,8 @@ def cmd_prune(args):
 
 
 def cmd_tune(args):
+    if getattr(args, "decoder", False):
+        return cmd_tune_decoder(args)
     cfg = config.load()
     ch = int(getattr(args, "channel", 1) or 1)
     ok, why = engine.cable_present(cfg, ch)
@@ -985,11 +1049,21 @@ def build_parser():
                     help="list hardware inputs you can loop")
     sp.set_defaults(func=cmd_route)
 
-    sp = sub.add_parser("tune", help="show/change dial frequency")
+    sp = sub.add_parser("tune", help="change the dial, or measure decoder depth")
     sp.add_argument("--dial", type=int)
     sp.add_argument("--offset", type=int, default=1500)
     sp.add_argument("--channel", type=int, default=1,
                     help="which decoder (default 1)")
+    sp.add_argument("--decoder", action="store_true",
+                    help="sweep decode-depth profiles, report decodes vs CPU")
+    sp.add_argument("--runs", type=int, default=2,
+                    help="repetitions per level (default 2)")
+    sp.add_argument("--levels", default="0,-14,-18",
+                    help="comma-separated attenuation in dB (default 0,-14,-18)")
+    sp.add_argument("--apply", action="store_true",
+                    help="save the winning profile to config.json")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="show the plan without starting anything")
     sp.set_defaults(func=cmd_tune)
 
     sp = sub.add_parser("migrate",

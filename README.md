@@ -229,6 +229,37 @@ Commands
 | `js8call-logger migrate [--dry-run]` | fold legacy flat `GROUP*.txt` conversation files into `conversations/groups/` |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 
+Decode depth
+------------
+
+JS8Call's refinement passes are environment switches rather than settings:
+
+    JS8_DISABLE_DEEP_SEARCH      search extra candidates each period
+    JS8_DISABLE_LDPC_RESCUE      retry a failed frame with another LDPC seed
+    JS8_DISABLE_COHERENT_DATA    coherent re-demodulation of data frames
+    JS8_DISABLE_REDEMOD          aided re-demodulation after a first decode
+    JS8_DISABLE_FREQ_TRACKING    follow slow frequency drift
+    JS8_DISABLE_TIMING_TRACKING  follow symbol timing drift
+
+`tune --decoder` measures them instead of guessing:
+
+    js8call-logger tune --decoder --dry-run          # what would be tested
+    js8call-logger tune --decoder --levels -20,-23   # measure, do not save
+    js8call-logger tune --decoder --apply            # keep the winner
+
+It plays the known fixture at real signal-to-noise ratios — white noise mixed
+in, not merely a lower volume, because a quiet clean signal is still an easy
+decode — counts the decodes per transmission and the CPU the decoder burned,
+and ranks profiles on decodes first, CPU second. The logger is stopped and any
+source loops paused for the run, then restored.
+
+Measured here (2026-11-25): at −20 dB SNR every profile decoded, at −23 dB
+none did, and CPU was 0.83–0.85 s per 15 s period for all three profiles. So
+no default changed: all passes stay on. Nothing measurable disappeared by
+turning them off, and they matter in conditions one clean frame cannot
+reproduce. On a slow machine the same command tells you what *your* CPU gives
+up — `decode_env` in config.json takes the answer.
+
 Many stations at once
 ---------------------
 
