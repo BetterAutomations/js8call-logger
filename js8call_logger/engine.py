@@ -301,6 +301,8 @@ class Engine:
                 note = ensure_cable(self.cfg, self.state_file, dec.channel)
                 if note:
                     print(note, flush=True)
+            self._restore_source_loops()
+            for dec in self.decoders:
                 dec.spawn()
             for dec in self.decoders:
                 dec.wait_api()
@@ -341,6 +343,21 @@ class Engine:
             time.sleep(0.05)
         self.shutdown()
         return 0
+
+    def _restore_source_loops(self) -> None:
+        """Re-create `route-audio --source` loops after a reboot.
+
+        The loop modules live in the sound server, so they survive a restart of
+        this daemon; they do not survive a reboot. The sources are remembered in
+        config for exactly that case.
+        """
+        for src in list(self.cfg.get("source_loops") or []):
+            try:
+                created = pulse.loop_source(src, state_file=self.state_file)
+                print(("source loop on: " if created else "source loop already on: ")
+                      + src, flush=True)
+            except pulse.PulseError as exc:
+                print(f"could not restore source loop {src}: {exc}", file=sys.stderr)
 
     def _poll(self, dec: Decoder) -> list[dict]:
         try:

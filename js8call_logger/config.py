@@ -26,6 +26,7 @@ DEFAULTS = {
     "monitor": True,                  # hear the cable on the speakers
     "tap": False,                     # copy the speakers into the cable instead
     "channels": 1,                    # decoders = cables (cable up --channels N)
+    "source_loops": [],               # capture sources looped into the cable
     "route_apps": [],                 # apps route-audio should keep on the cable
     "route_watch": True,              # re-route those apps when they reload
     # decoder / API

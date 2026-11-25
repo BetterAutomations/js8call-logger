@@ -319,6 +319,9 @@ def cmd_cable(args):
                   "('js8call-logger route-audio --stop-copy' to remove it)")
         if removed:
             print(f"monitoring off ({len(removed)} loopback(s) removed)")
+        if int(cfg.get("channels") or 1) >= 1 and bool(cfg.get("monitor", True)) != (not args.no_monitor):
+            cfg["monitor"] = not args.no_monitor
+            config.save(cfg)
         if done.get("monitor") or pulse.cable_status()["monitor"]:
             print("monitoring enabled: you still hear the cable output on your speakers")
         if done.get("sink"):
@@ -379,6 +382,13 @@ def cmd_route(args):
         except pulse.PulseError as exc:
             print(str(exc))
             return 2
+        # Remember it whether or not we had to create it: "already looped" is
+        # exactly the case where a reboot would otherwise lose the loop.
+        loops = list(cfg.get("source_loops") or [])
+        if args.source not in loops:
+            loops.append(args.source)
+            cfg["source_loops"] = loops
+            config.save(cfg)
         if created:
             print(f"line input loop on: {args.source} -> the cable")
             print("the input is still usable by other programs; nothing was moved")
@@ -394,6 +404,9 @@ def cmd_route(args):
         return 0
 
     if args.stop_source:
+        if cfg.get("source_loops"):
+            cfg["source_loops"] = []
+            config.save(cfg)
         killed = pulse.stop_source_loops(state_file=sf)
         print(f"line input loop off ({len(killed)} module(s) unloaded)" if killed
               else "no hardware-input loop was running")
@@ -417,6 +430,9 @@ def cmd_route(args):
         done = pulse.ensure_cable(state_file=sf, monitor=False,
                                   rate=int(cfg.get("cable_rate") or 48000), tap=True)
         if done.get("tap") or pulse._tap_active():
+            cfg["tap"] = True
+            cfg["monitor"] = False        # required, and worth remembering
+            config.save(cfg)
             print("copy on: everything your speakers play now also goes to the cable")
             print("nothing was moved, so your apps keep playing where they are")
             return 0
@@ -425,6 +441,9 @@ def cmd_route(args):
 
     if args.stop_copy:
         n = pulse.stop_tap(sf)
+        if cfg.get("tap"):
+            cfg["tap"] = False
+            config.save(cfg)
         print(f"copy off ({len(n)} module(s) unloaded)" if n else "copy was not on")
         return 0
 

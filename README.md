@@ -179,6 +179,16 @@ new streams back onto the cable every few seconds — so reloading the WebSDR ta
 no longer means going deaf. Set `"route_watch": false` in config.json to stop
 that.
 
+**What survives what.** Restarting the service (`stop` then `start`) keeps
+everything: the cable, its monitor loopback, the copy loop and any source loops
+are sound-server modules, not children of the daemon, so they keep running
+while the logger is down, and remembered apps are re-routed from config.json.
+A reboot or a PipeWire restart loses the modules; `start` rebuilds the cable,
+the monitor loopback, the copy loop and the `--source` loops from config.json,
+and route-watch moves remembered applications back when they next play. Every
+routing verb records what it did: `cable up [--no-monitor]`,
+`route-audio --copy|--stop-copy|--source|--stop-source`.
+
 `route-audio` never moves the logger's own monitor loopback: that would feed the
 cable into itself and pin the input at 0 dBFS. Browsers remain awkward even so —
 Chrome ignores `PULSE_SINK`, and a full browser restart is sometimes the only
