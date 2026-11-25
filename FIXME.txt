@@ -28,12 +28,6 @@ CLOCK
 - Absolute date/time cannot come from JS8 at all (frames carry sub-15 s
   phase, not a date). If that is ever needed, it is a GPS puck, not this.
 
-LOG
-  JS8 text is mostly plain English, so this is low value compared to CW.
-- Conversations split by group (@ALLCALL, @SITREP...) rather than only by
-  correspondent.
-- Retention/pruning policy for old logs and the SQLite file.
-
 PACKAGING
 - GLIBC fallback build (JS8Call 2.5.2 / Qt5 / PortAudio) for distros older
   than glibc 2.38. Not needed for the target machine (Lubuntu 26.10).

@@ -225,6 +225,7 @@ Commands
 | `js8call-logger tail --station K1ABC` | only that correspondent |
 | `js8call-logger dial [FREQ] [--offset HZ] [--clear]` | show or set the dial stamped on new lines; `7078`, `7078.00`, `7.078` and `7.078MHz` all work |
 | `js8call-logger tune [--dial HZ] [--channel N]` | lower-level: dial and channel settings straight to one decoder |
+| `js8call-logger prune [--days N] [--dry-run] [--delete]` | archive (or delete) logs older than N days |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 
 Many stations at once
@@ -302,6 +303,12 @@ Logs
       sqlite3 js8call-logger.db "select ts, src, text from records where snr > 0"
 
 * `~/js8call-logger/conversations/CALL.txt` — that station's traffic only.
+* `~/js8call-logger/conversations/groups/GROUP.txt` — traffic addressed to a
+  group (`@ALLCALL`, `@SITREP`, ...). A record can appear in both the sender's
+  file and the group file, because "who said it" and "where it was said" are
+  different questions; heartbeats appear in neither. Group names are
+  uppercased and stripped of punctuation, so `@GHOST-NET` becomes
+  `groups/GHOSTNET.txt`.
 
 Heartbeats (`@HB`, `HB FN42`) are most of JS8 traffic. They are left out of
 the text files and of `tail -f` by default, and always kept in the JSONL and
@@ -346,6 +353,26 @@ In config.json:
 
 Each new daily file starts with a one-line legend, because `meaning[TOKEN]` is
 not self-evident a month later.
+
+Retention
+---------
+
+Nothing is ever pruned unless you ask: `retention_days` defaults to 0, which
+means keep everything.
+
+    js8call-logger prune --days 90 --dry-run     # what would go
+    js8call-logger prune --days 90               # archive it
+
+The default is to **archive**, not delete: old daily files and conversation
+files are gzipped into `~/js8call-logger/archive/`, old JSONL lines are
+archived the same way, and matching SQLite rows are removed and the database
+vacuumed. `--delete` removes instead of archiving. `--days` overrides
+`retention_days` in config.json, so a one-off cleanup does not have to change
+your policy.
+
+Stop the logger first. A running daemon holds the JSONL open, so rewriting it
+underneath would lose whatever it writes next; `prune` refuses while it is
+running unless you pass `--force` and know why.
 
 Clock
 -----

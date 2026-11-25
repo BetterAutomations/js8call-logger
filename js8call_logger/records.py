@@ -276,17 +276,40 @@ def render(rec: dict, width: int = 150, expand: str = "off",
     return [ln[:width] for ln in lines]
 
 
-def station_of(rec: dict, mycall: str) -> str:
-    """Which other station a record belongs to, for per-conversation files."""
-    src, dst = rec.get("src") or "", rec.get("dst") or ""
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", (name or "").upper()) or "UNKNOWN"
+
+
+def conversation_targets(rec: dict, mycall: str) -> list[str]:
+    """Files a record belongs in, relative to the conversations directory.
+
+    Two questions worth answering separately, so a record can land in both: who
+    said it (a callsign file) and where it was said (a group file for @ALLCALL,
+    @SITREP, ...). Heartbeats are excluded by the caller.
+    """
+    src = (rec.get("src") or "").strip()
+    dst = (rec.get("dst") or "").strip()
     me = (mycall or "").upper()
+    out: list[str] = []
     if src and src.upper() != me and CALL_RE.match(src.upper()):
-        return src.upper()
-    if dst and not dst.startswith("@") and dst.upper() != me:
-        return dst.upper()
+        out.append(f"{_safe_name(src)}.txt")
     if dst.startswith("@"):
-        return "GROUP-" + dst[1:].upper()
-    return dst.upper() or src.upper() or "UNKNOWN"
+        out.append(os.path.join("groups", f"{_safe_name(dst[1:])}.txt"))
+    elif dst and dst.upper() != me and CALL_RE.match(dst.upper()):
+        out.append(f"{_safe_name(dst)}.txt")
+    if not out:
+        out.append(f"{_safe_name(dst or src)}.txt")
+    # de-duplicate, keep order
+    seen: list[str] = []
+    for name in out:
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def station_of(rec: dict, mycall: str) -> str:
+    """Primary correspondent, used for display and older log files."""
+    return os.path.basename(conversation_targets(rec, mycall)[0])[:-4]
 
 
 class Sink:
@@ -381,17 +404,17 @@ class Sink:
                   for c in self.COLUMNS))
         db.commit()
 
-        name = station_of(rec, self.cfg.get("mycall", ""))
         if rec.get("heartbeat"):
             return
-        key = re.sub(r"[^A-Z0-9]", "", name) or "UNKNOWN"
-        fh = self._conv.get(key)
-        if fh is None:
-            fh = open(os.path.join(self.paths["conversations"], f"{key}.txt"),
-                      "a", encoding="utf-8", buffering=1)
-            self._conv[key] = fh
-        for line in lines:
-            fh.write(line + "\n")
+        for name in conversation_targets(rec, self.cfg.get("mycall", "")):
+            path = os.path.join(self.paths["conversations"], name)
+            fh = self._conv.get(name)
+            if fh is None:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                fh = open(path, "a", encoding="utf-8", buffering=1)
+                self._conv[name] = fh
+            for line in lines:
+                fh.write(line + "\n")
 
     def close(self) -> None:
         for fh in [self._text_fh, self._jsonl_fh, *self._conv.values()]:

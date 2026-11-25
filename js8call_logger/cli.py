@@ -16,7 +16,7 @@ import sys
 import time
 
 from . import __version__
-from . import api, clock, config, engine, pulse, records
+from . import api, clock, config, engine, pulse, records, retention
 
 APP = config.APP
 _STOP = {"now": False}
@@ -584,6 +584,23 @@ def cmd_dial(args):
     return 0
 
 
+def cmd_prune(args):
+    """Archive (or delete) logs older than N days. Off unless asked."""
+    p = config.ensure_dirs()
+    cfg = config.load(create=False)
+    days = args.days if args.days is not None else int(cfg.get("retention_days") or 0)
+    if days <= 0:
+        print("retention is off: pass --days N, or set retention_days in config.json")
+        return 2
+    if engine.read_pid(p) and engine._alive(engine.read_pid(p)) and not args.force:
+        print("the logger is running; stop it first, or use --force "
+              "(a running daemon holds the JSONL open)")
+        return 2
+    result = retention.prune(p, days, dry_run=args.dry_run, delete=args.delete)
+    print(retention.summary_text(result))
+    return 0
+
+
 def cmd_tune(args):
     cfg = config.load()
     ch = int(getattr(args, "channel", 1) or 1)
@@ -962,6 +979,15 @@ def build_parser():
     sp.add_argument("--channel", type=int, default=1,
                     help="which decoder (default 1)")
     sp.set_defaults(func=cmd_tune)
+
+    sp = sub.add_parser("prune", help="archive or delete logs older than N days")
+    sp.add_argument("--days", type=int, help="age in days (default: retention_days)")
+    sp.add_argument("--delete", action="store_true",
+                    help="remove instead of archiving under <home>/archive")
+    sp.add_argument("--dry-run", action="store_true", help="say what would go")
+    sp.add_argument("--force", action="store_true",
+                    help="allow pruning while the logger is running")
+    sp.set_defaults(func=cmd_prune)
 
     sp = sub.add_parser("dial", help="show or set the dial stamped on new lines")
     sp.add_argument("freq", nargs="?",

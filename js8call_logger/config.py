@@ -45,6 +45,7 @@ DEFAULTS = {
     "expand_min_coherence": 45,       # do not gloss a garbled decode
     "snr_min_text": None,             # drop weaker lines from the text file
     "dedupe_grace_s": 2.0,            # window to collapse ACTIVITY/DIRECTED
+    "retention_days": 0,              # 0 = keep everything; see `prune`
     # clock
     "clock_apply": "log",             # "log" (A) or "system" (B, needs root)
     "clock_samples": 15,              # decodes to median before acting
