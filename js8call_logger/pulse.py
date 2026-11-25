@@ -412,7 +412,16 @@ def route_sink_inputs(target: str = SINK, indices=None):
 
 
 def route_new_streams(target: str = SINK, apps=(), known=()):
-    """Re-route streams from remembered apps; routing is not sticky."""
+    """Re-route streams from remembered apps.
+
+    Deliberately re-asserts on every poll rather than remembering what was
+    already moved: the destination is not sticky, and another program (or the
+    user's own mixer) can move a stream away at any time. `known` is returned
+    for callers that want to report first sightings, but it must not suppress
+    the move - doing that once here meant a stream moved back by a second
+    logger was never recovered, and `route-audio --all` looked like it did not
+    stick.
+    """
     moved = []
     apps = {a for a in apps if a}
     for row in sink_input_details():
@@ -420,7 +429,7 @@ def route_new_streams(target: str = SINK, apps=(), known=()):
         if row.get("sink_name") == target or is_own_loopback(row):
             continue
         app = row["app"] if row["app"] != "?" else row["stream"]
-        if app not in apps or idx in known:
+        if app not in apps:
             continue
         p = _run(["pactl", "move-sink-input", idx, target], check=False)
         if p.returncode == 0:

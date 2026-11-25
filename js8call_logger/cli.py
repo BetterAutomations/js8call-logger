@@ -624,10 +624,20 @@ def cmd_doctor(_args):
             # the speakers, or - the confusing case - into another tool's
             # cable. Name where it actually is, or the message reads as "your
             # browser is not playing".
+            share = None
             for r in elsewhere[:6]:
                 who = r.get("app") if r.get("app") != "?" else r.get("stream")
-                print(f"  [!!] {who or '?'} is playing on {r.get('sink_name') or '?'}")
-            if elsewhere:
+                sink = r.get("sink_name") or "?"
+                other_cable = sink.endswith("_cable")
+                print(f"  [!!] {who or '?'} is playing on {sink}"
+                      + ("  (another logger's cable)" if other_cable else ""))
+                if other_cable and not share:
+                    share = sink
+            if share:
+                # Moving it would fight that program's own routing watch.
+                print(f"       share it instead of moving it: "
+                      f"{APP} route-audio --source {share}.monitor")
+            elif elsewhere:
                 print(f"       send it over with: {APP} route-audio --all   "
                       f"(--index N for one stream, --copy to leave it where it is)")
         for r in rows:

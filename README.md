@@ -175,6 +175,14 @@ stolen, and the other tool's own routing watch keeps working:
 Stop it with `route-audio --stop-source`. `doctor` is the quickest way to see
 which of the two cables a stream is actually on.
 
+**Two programs must not both route the same app.** If another tool watches the
+same application (morse-logger does, if it is running), the two watchdogs move
+the stream back and forth every few seconds and the audio flaps. The logger
+notices after three moves in a minute, says so in `run/daemon.log`, and leaves
+that application alone for five minutes rather than churning. The real fix is
+to share instead of compete: loop the other program's cable into ours and clear
+`route_apps`, so only one program claims the stream.
+
 **Routing sticks after the first time.** `route-audio` remembers which
 applications it saw, and while the logger runs it moves those applications'
 new streams back onto the cable every few seconds — so reloading the WebSDR tab

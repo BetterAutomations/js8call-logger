@@ -270,6 +270,9 @@ class Engine:
         self.decodes = 0
         self.last_decode: float | None = None
         self.stop_flag = False
+        self._moves: dict[str, list[float]] = {}
+        self._backoff: dict[str, float] = {}
+        self._warned: set[str] = set()
         n = max(1, int(self.cfg.get("channels") or 1))
         self.decoders = [Decoder(self.cfg, self.p, ch) for ch in range(1, n + 1)]
 
@@ -405,6 +408,10 @@ class Engine:
         except Exception:
             pass
         apps = self.cfg.get("route_apps") or []
+        now = time.time()
+        # Yield to an app we have already lost a tug of war over: repeating the
+        # move made the audio flap between two cables every few seconds.
+        apps = [a for a in apps if self._backoff.get(a, 0) <= now]
         if not apps:
             return
         try:
@@ -415,6 +422,21 @@ class Engine:
         for idx, app in moved:
             print(f"route: {app} started playing (stream {idx}) - "
                   "moved it to the cable", flush=True)
+            # Another logger (morse-logger, say) watching the same application
+            # moves it back a fraction of a second later. Warn once, then stop
+            # competing for a while instead of flapping the audio forever.
+            hist = [t for t in self._moves.setdefault(app, []) if now - t <= 60]
+            hist.append(now)
+            self._moves[app] = hist
+            if len(hist) >= 3 and app not in self._warned:
+                self._warned.add(app)
+                self._backoff[app] = now + 300
+                print(f"route: {app} has been put back on the cable {len(hist)} times "
+                      "in a minute - another program is routing it too. Sharing the "
+                      "audio is the fix: "
+                      f"'{config.APP} route-audio --source <other>_cable.monitor', "
+                      "or turn that program's own routing watch off. Leaving it "
+                      "alone for 5 minutes.", flush=True)
 
     def _restart(self, dec: Decoder) -> None:
         code = dec.proc.returncode if dec.proc else None
