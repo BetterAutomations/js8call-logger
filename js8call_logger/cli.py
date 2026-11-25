@@ -382,6 +382,13 @@ def cmd_route(args):
         if created:
             print(f"line input loop on: {args.source} -> the cable")
             print("the input is still usable by other programs; nothing was moved")
+            if args.source.endswith(".monitor") and pulse.cable_status().get("monitor"):
+                # Our own monitor plays the cable on the speakers, and the
+                # source's owner probably does the same for its cable: you
+                # hear the same audio twice, a few tens of ms apart.
+                print("note: monitoring is on, so you may hear this audio twice "
+                      f"(the source's program is also playing it). "
+                      f"Use '{APP} cable up --no-monitor' if so.")
         else:
             print(f"already looped: {args.source} is already feeding the cable")
         return 0

@@ -166,6 +166,7 @@ morse-logger listening to the same browser tab — do not move the stream back
 and forth; loop that program's output into our cable instead. Nothing is
 stolen, and the other tool's own routing watch keeps working:
 
+    js8call-logger cable up --no-monitor              # it already plays it once
     js8call-logger route-audio --list-sources          # shows other outputs too
     js8call-logger route-audio --source morse-logger_cable.monitor
 
