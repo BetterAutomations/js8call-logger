@@ -511,6 +511,79 @@ def cmd_route(args):
     return 0
 
 
+def parse_freq(text: str) -> int:
+    """Hz from '7.078', '7078', '7078.00', '7.078MHz', '7078000Hz'.
+
+    Unit traps are the point here: a WebSDR is labelled in kHz, a band plan in
+    MHz, the API in Hz, and 7041.09 is kHz even though it looks like MHz.
+    """
+    s = str(text).strip().replace(",", "").replace(" ", "")
+    low = s.lower()
+    mult = None
+    for suffix, m in (("mhz", 1_000_000), ("khz", 1000), ("hz", 1)):
+        if low.endswith(suffix):
+            mult = m
+            s = s[: -len(suffix)]
+            break
+    v = float(s)
+    if mult is not None:
+        hz = v * mult
+    elif v >= 100_000:
+        hz = v                    # already Hz
+    elif v >= 100:
+        hz = v * 1000             # kHz, how WebSDRs label the dial
+    else:
+        hz = v * 1_000_000        # MHz
+    return int(round(hz))
+
+
+def cmd_dial(args):
+    """Show or set the dial stamped on new log lines, morse-logger's dial."""
+    p = config.ensure_dirs()
+    cfg = config.load()
+    running = bool(engine.read_pid(p) and engine._alive(engine.read_pid(p)))
+    if args.freq is None and not args.clear:
+        hz = cfg.get("dial_hz")
+        print(f"dial: {hz / 1e6:g} MHz" if hz else "dial: not set")
+        if not running:
+            print("(the logger is not running; this is the value it will use)")
+        return 0
+    if args.clear:
+        cfg["dial_hz"] = None
+        config.save(cfg)
+        print("dial cleared - new lines carry whatever JS8Call reports")
+        return 0
+    try:
+        hz = parse_freq(args.freq)
+    except ValueError:
+        print(f"not a frequency: {args.freq!r}")
+        return 2
+    if 100 <= float(str(args.freq).strip().replace(",", "")) < 100_000:
+        print(f"note: {args.freq} looks like kHz - recording {hz / 1e6:g} MHz")
+    cfg["dial_hz"] = hz
+    config.save(cfg)
+
+    applied = "not running (applied at next start)"
+    if running:
+        ports = [int(cfg.get("api_port", 2442)) + ch - 1
+                 for ch in range(1, int(cfg.get("channels", 1)) + 1)]
+        done = []
+        for port in ports:
+            client = api.Js8Api(cfg["api_host"], port)
+            try:
+                client.connect(2.0)
+                client.set_freq(hz, args.offset)
+                done.append(port)
+            except (OSError, api.ApiError) as exc:
+                print(f"port {port}: {exc}")
+            finally:
+                client.close()
+        applied = ("running, applied now" if len(done) == len(ports)
+                   else "running, but the API did not answer on every decoder")
+    print(f"dial set to {hz / 1e6:g} MHz - {applied}")
+    return 0
+
+
 def cmd_tune(args):
     cfg = config.load()
     ch = int(getattr(args, "channel", 1) or 1)
@@ -889,6 +962,14 @@ def build_parser():
     sp.add_argument("--channel", type=int, default=1,
                     help="which decoder (default 1)")
     sp.set_defaults(func=cmd_tune)
+
+    sp = sub.add_parser("dial", help="show or set the dial stamped on new lines")
+    sp.add_argument("freq", nargs="?",
+                    help="7.078 (MHz), 7078 (kHz) or 7078000 (Hz); no argument shows it")
+    sp.add_argument("--offset", type=int, default=1500,
+                    help="audio offset in Hz (default 1500)")
+    sp.add_argument("--clear", action="store_true", help="stop stamping a dial")
+    sp.set_defaults(func=cmd_dial)
 
     sp = sub.add_parser("clock", help="report or apply the clock offset")
     sp.add_argument("--set", action="store_true", help="write the system clock")

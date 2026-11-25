@@ -40,6 +40,3 @@ PACKAGING
 - Flatpak, as morse-logger eventually wants.
 
 == Christopher's notes==
-Are the verbs and arguments identical (where appropriate) to morse-logger?
-The install.sh prompt for a path on morse-logger uses the user home, not the
-sudo user.

@@ -37,7 +37,7 @@ Quick start
 
 That is the whole WebSDR workflow. The receiver stays yours to tune: JS8Call
 decodes whatever lands in its ~2.5 kHz passband, so there is no tone to lock
-onto and nothing to retune in the logger. `tune --dial` only changes the
+onto and nothing to retune in the logger. `dial` (or `tune --dial`) only changes the
 frequency stamped on new lines.
 
 Everything lives in `~/js8call-logger` (config, `logs/`, `conversations/`,
@@ -223,7 +223,8 @@ Commands
 | `js8call-logger tail --all` | include heartbeats |
 | `js8call-logger tail --min-snr -15` | hide weaker decodes (JSONL view) |
 | `js8call-logger tail --station K1ABC` | only that correspondent |
-| `js8call-logger tune [--dial HZ] [--channel N]` | show or change the dial stamped on new lines |
+| `js8call-logger dial [FREQ] [--offset HZ] [--clear]` | show or set the dial stamped on new lines; `7078`, `7078.00`, `7.078` and `7.078MHz` all work |
+| `js8call-logger tune [--dial HZ] [--channel N]` | lower-level: dial and channel settings straight to one decoder |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 
 Many stations at once
@@ -265,7 +266,7 @@ Logs
   | field | width | meaning |
   |---|---|---|
   | timestamp | 19 | when the transmission started, corrected by the clock offset |
-  | dial | 10 | frequency from config or `tune --dial`, `---` if unset |
+  | dial | 10 | frequency from `dial` or config, `---` if unset |
   | `snr=` | 8 | the decoder's signal report in dB, `--` when it reported none |
   | `coh=` | 7 | 0–100, how much of the text looks like real traffic |
   | channel | 4 | `ch2` when several decoders run, blank otherwise |
