@@ -271,3 +271,92 @@ class PlaceholderDuplicateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FragmentTest(unittest.TestCase):
+    """A decode is one frame of a longer transmission: say so in the log.
+
+    Frame types come from the API's BITS field, mapped against ALL.TXT:
+    3 = directed (complete), 1/2 = compound message header and body chunks,
+    0 = heartbeat OR free text - free text only counts as a fragment when it
+    fills a frame (13+ characters), so a one-word "73" is not marked.
+    """
+
+    BASE = {"ts": "2026-11-25 13:39:43", "dial": 7078000, "snr": -24,
+            "offset": 1152, "src": "", "dst": ""}
+
+    def test_frame_types(self):
+        cases = [
+            (0, "HEY! ARE YOU ON T", False, True),    # free-text chunk
+            (0, "73", False, False),                  # short, probably whole
+            (0, "@HB HEARTBEAT EM48", True, False),   # heartbeat
+            (1, "W4CAT: ", False, True),              # compound header
+            (2, "EMAIL CHECK", False, True),          # compound body
+            (3, "K1ABC: K2DEF NO", False, False),     # complete directed
+            (None, "ANY TEXT AT ALL", False, False),  # older API, no BITS
+        ]
+        for frame, text, hb, want in cases:
+            self.assertEqual(records.is_fragment(frame, text, hb), want,
+                             f"frame={frame} text={text!r}")
+
+    def test_fragment_line_ends_with_a_marker(self):
+        rec = dict(self.BASE, text="HEY! ARE YOU ON T", frame=0,
+                   heartbeat=False, fragment=True)
+        line = records.render(rec)[0]
+        self.assertTrue(line.endswith("\u2026"))
+        self.assertLessEqual(len(line), 150)
+
+    def test_complete_line_has_no_marker(self):
+        rec = dict(self.BASE, text="K1ABC: K2DEF NO", frame=3,
+                   heartbeat=False, fragment=False)
+        self.assertFalse(records.render(rec)[0].endswith("\u2026"))
+
+    def test_columns_are_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = config.ensure_dirs(config.paths(tmp))
+            sink = records.Sink(p, dict(config.DEFAULTS))
+            rec = dict(self.BASE, text="HEY! ARE YOU ON T", frame=0,
+                       heartbeat=False, fragment=True, kind="activity")
+            sink.write(rec, records.render(rec))
+            sink.close()
+            import sqlite3
+            db = sqlite3.connect(os.path.join(p["logs"], "js8call-logger.db"))
+            row = db.execute("SELECT frame, fragment FROM records").fetchone()
+            self.assertEqual(row, (0, 1))
+
+
+class DirectedFragmentTest(unittest.TestCase):
+    """A DIRECTED record without the EOT character is not the last frame."""
+
+    def ev(self, text):
+        return {"type": "RX.DIRECTED", "value": text,
+                "params": {"FROM": "K1ABC", "TO": "@ALLCALL", "CMD": " CQ",
+                           "TEXT": text, "SNR": 3, "OFFSET": 1500,
+                           "DIAL": 7078000, "UTC": 1795631983375}}
+
+    def test_complete_message_has_no_marker(self):
+        rec = records.parse_event(self.ev("K1ABC: @ALLCALL CQ CQ \u2662"))
+        self.assertFalse(rec["fragment"])
+
+    def test_missing_eot_marks_a_fragment(self):
+        rec = records.parse_event(self.ev("HEY! ARE YOU ON T"))
+        self.assertTrue(rec["fragment"])
+        self.assertTrue(records.render(rec)[0].endswith("\u2026"))
+
+    def test_custom_eot(self):
+        rec = records.parse_event(self.ev("K1ABC: TEST ~~"), eot="~~")
+        self.assertFalse(rec["fragment"])
+
+    def test_frame_type_survives_the_merge(self):
+        d = records.Deduper(grace_s=2.0)
+        act = dict(self.ev("HEY! ARE YOU ON T"))
+        act["type"] = "RX.ACTIVITY"
+        act["params"] = {"BITS": 1, "SNR": -24, "OFFSET": 1152,
+                         "DIAL": 7078000, "UTC": 1795631983375}
+        a = records.parse_event(act)
+        b = records.parse_event(self.ev("HEY! ARE YOU ON T"))
+        self.assertIsNone(b["frame"])
+        d.add(a, now=100.0)
+        got = d.flush(now=110.0)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["frame"], 1)

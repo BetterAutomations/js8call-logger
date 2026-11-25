@@ -55,7 +55,7 @@ def _split_activity(value: str) -> tuple[str, str]:
     return "", v
 
 
-def parse_event(ev: dict, tz_offset_s: float = 0.0) -> dict | None:
+def parse_event(ev: dict, tz_offset_s: float = 0.0, eot: str = "\u2662") -> dict | None:
     """Map one API frame to a record, or None when it is not a reception."""
     typ = str(ev.get("type") or "")
     if typ not in ("RX.DIRECTED", "RX.ACTIVITY"):
@@ -75,6 +75,8 @@ def parse_event(ev: dict, tz_offset_s: float = 0.0) -> dict | None:
         if not text:
             return None
     utc_ms = params.get("UTC")
+    heartbeat = is_heartbeat(cmd, dst, text)
+    the_frame = _as_int(params.get("BITS"))
     return {
         "kind": "directed" if typ == "RX.DIRECTED" else "activity",
         "utc_ms": utc_ms,
@@ -89,8 +91,33 @@ def parse_event(ev: dict, tz_offset_s: float = 0.0) -> dict | None:
         "speed": params.get("SPEED"),
         "tdrift": params.get("TDRIFT"),
         "grid": str(params.get("GRID") or "").strip(),
-        "heartbeat": is_heartbeat(cmd, dst, text),
+        "heartbeat": heartbeat,
+        "frame": the_frame,
+        # JS8Call appends the end-of-transmission character only to the last
+        # frame of a message, so a DIRECTED record without it is a piece. That
+        # is the decoder's own opinion - better than guessing from BITS, which
+        # only ACTIVITY frames carry.
+        "fragment": (not text.rstrip().endswith(eot)) if typ == "RX.DIRECTED"
+        else is_fragment(the_frame, text, heartbeat),
     }
+
+
+# A JS8 frame carries about 13 characters of free text. Measured against
+# ALL.TXT on 2026-11-25: type 3 (directed) is a complete message, types 1 and 2
+# are a compound message's header and body chunks, and type 0 whose text is not
+# a heartbeat is one free-text chunk of a longer transmission.
+FRAME_CHARS = 13
+
+
+def is_fragment(frame, text: str, heartbeat: bool) -> bool:
+    """True when this decode is one piece of a longer transmission."""
+    if not isinstance(frame, int):
+        return False
+    if frame in (1, 2):                      # FrameCompound / CompoundDirected
+        return True
+    if frame == 0 and not heartbeat and len((text or "").strip()) >= FRAME_CHARS:
+        return True                          # free-text chunk, more may follow
+    return False
 
 
 def _as_int(v):
@@ -147,6 +174,8 @@ class Deduper:
         key = self._key(rec)
         for i, old in enumerate(self._pending):
             if self._key(old) == key:
+                if rec.get("frame") is None and old.get("frame") is not None:
+                    rec["frame"] = old["frame"]     # only ACTIVITY carries BITS
                 if self._weight(rec) > self._weight(old):
                     self._pending[i] = rec
                 self.dropped_duplicates += 1
@@ -203,6 +232,8 @@ def render(rec: dict, width: int = 150) -> list[str]:
         rec["coherence"] = coherence(rec.get("text") or "")
     head = _prefix(rec)
     text = " ".join((rec.get("text") or "").split())
+    if rec.get("fragment") and text and not text.endswith("\u2026"):
+        text += " \u2026"                   # one frame of a longer message
     cont_mark = f"{rec['ts']}  ... "
     if not text:
         return [head.rstrip()[:width]]
@@ -249,7 +280,7 @@ class Sink:
 
     COLUMNS = ("ts", "kind", "src", "dst", "cmd", "snr", "offset", "dial",
                "speed", "tdrift", "grid", "heartbeat", "text", "utc_ms",
-               "channel", "coherence")
+               "channel", "coherence", "frame", "fragment")
 
     def __init__(self, paths: dict, cfg: dict):
         self.paths = paths
@@ -273,10 +304,11 @@ class Sink:
                 " ts TEXT, kind TEXT, src TEXT, dst TEXT, cmd TEXT,"
                 " snr INTEGER, offset INTEGER, dial INTEGER, speed INTEGER,"
                 " tdrift REAL, grid TEXT, heartbeat INTEGER, text TEXT,"
-                " utc_ms INTEGER, channel INTEGER, coherence INTEGER)")
+                " utc_ms INTEGER, channel INTEGER, coherence INTEGER,"
+                " frame INTEGER, fragment INTEGER)")
             # logs written by older versions lack columns added since
             cols = {r[1] for r in self._db.execute("PRAGMA table_info(records)")}
-            for extra in ("channel", "coherence"):
+            for extra in ("channel", "coherence", "frame", "fragment"):
                 if extra not in cols:
                     self._db.execute(f"ALTER TABLE records ADD COLUMN {extra} INTEGER")
             self._db.execute("CREATE INDEX IF NOT EXISTS records_ts ON records(ts)")

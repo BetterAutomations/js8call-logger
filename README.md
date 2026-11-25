@@ -283,6 +283,17 @@ Logs
   marker; a word too long for a line moves whole to the next one and is only
   truncated if it exceeds a whole line.
 
+  A line ending in **` …`** is one frame of a longer transmission, not the
+  whole message. A JS8 frame carries about a dozen characters, so a sender's
+  sentence arrives as several frames; when only one of them decodes, this log
+  says so instead of leaving what looks like a complete short message. The
+  trailing marker is our addition — the wrap `...` always starts a line, the
+  fragment `…` always ends one, so the two cannot be confused. Frame types 1
+  and 2 (compound message header and body) are always marked; type 0 is marked
+  when its text fills a frame, which is what free-text chunks look like, while
+  a complete "73" or a heartbeat is not. `frame` and `fragment` are stored as
+  columns so you can filter (`where fragment = 1`).
+
 * `js8call-logger.jsonl` — same records with every API field (UTC, cmd, grid,
   speed, tdrift, utc_ms), one JSON object per line.
 * `js8call-logger.db` — SQLite table `records`:

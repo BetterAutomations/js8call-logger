@@ -370,7 +370,8 @@ class Engine:
             return []
 
     def _handle(self, frame: dict, channel: int) -> None:
-        rec = records.parse_event(frame, self.clock.offset())
+        rec = records.parse_event(frame, self.clock.offset(),
+                                  str(self.cfg.get("eot") or "\u2662"))
         if not rec:
             return
         rec["channel"] = channel
