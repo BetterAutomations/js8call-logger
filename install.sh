@@ -19,12 +19,19 @@ while [ $# -gt 0 ]; do
     esac
 done
 dest=$prefix/js8call-logger
-bindir=$prefix/bin
 sudo=
 if [ "$(id -u)" -ne 0 ]; then
     probe=$prefix
     while [ ! -e "$probe" ]; do probe=$(dirname "$probe"); done
     [ -w "$probe" ] || sudo=sudo
+fi
+# The command must land somewhere the shell already looks. A system install
+# goes to /usr/local/bin (as morse-logger does); a user-local --prefix install
+# cannot write there, so it uses <prefix>/bin.
+if [ -z "$sudo" ]; then
+    bindir=${JS8CALL_LOGGER_BINDIR:-/usr/local/bin}
+else
+    bindir=$prefix/bin
 fi
 
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
@@ -95,4 +102,8 @@ PY
 fi
 
 echo "done. logs will go to $home"
+case ":$PATH:" in
+    *":$bindir:"*) ;;
+    *) echo "note: $bindir is not on your PATH; add it or call $bindir/js8call-logger" ;;
+esac
 echo "Next: js8call-logger doctor && js8call-logger start"
