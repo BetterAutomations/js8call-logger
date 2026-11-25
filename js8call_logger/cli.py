@@ -569,10 +569,23 @@ def cmd_doctor(_args):
 
     print("\nAudio into the cable")
     try:
-        rows = [r for r in pulse.sink_input_details()
-                if r.get("sink_name") == pulse.sink_name(1)]
+        all_rows = pulse.sink_input_details()
+        rows = [r for r in all_rows if r.get("sink_name") == pulse.sink_name(1)]
+        elsewhere = [r for r in all_rows
+                     if r.get("sink_name") != pulse.sink_name(1)
+                     and not pulse.is_own_loopback(r)]
         if not rows:
             note("nothing is playing into the cable yet")
+            # Audio can be playing and still be invisible here: it is going to
+            # the speakers, or - the confusing case - into another tool's
+            # cable. Name where it actually is, or the message reads as "your
+            # browser is not playing".
+            for r in elsewhere[:6]:
+                who = r.get("app") if r.get("app") != "?" else r.get("stream")
+                print(f"  [!!] {who or '?'} is playing on {r.get('sink_name') or '?'}")
+            if elsewhere:
+                print(f"       send it over with: {APP} route-audio --all   "
+                      f"(--index N for one stream, --copy to leave it where it is)")
         for r in rows:
             kind = "monitor" if pulse.is_own_loopback(r) else "source"
             print(f"  [ok] {r.get('app')} -> {kind} (stream {r.get('index')})")

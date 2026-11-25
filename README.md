@@ -73,7 +73,7 @@ still decode. Turn all three off in the WebSDR or the receiver.
 | symptom | meaning | fix |
 |---|---|---|
 | `status` running, `decodes 0`, audio present | clock off, wrong mode, or pure noise | `timedatectl`; check USB and passband |
-| `decodes 0` and the cable is silent | tab muted/paused, stream never moved | `pactl list sink-inputs`, move it again |
+| `decodes 0` and the cable is silent | tab muted/paused, stream never moved, or routed into another tool's cable | `doctor` names the sink it is really on; `route-audio --all` or `--index N` |
 | `tail --js8call-debug` prints nothing | decoder is not receiving at all | `doctor`, then the restarts log |
 | text arrives but garbled, SNR positive | clipping or an overdriven WebSDR | lower the source volume |
 | only one or two stations ever appear | filter too narrow, or the band is quiet | widen to ~3 kHz; try another band |
