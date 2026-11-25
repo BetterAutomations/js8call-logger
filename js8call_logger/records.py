@@ -111,7 +111,7 @@ class Deduper:
     """
 
     def __init__(self, grace_s: float = 2.0, max_pending: int = 100,
-                 recent_s: float = 15.0):
+                 recent_s: float = 60.0):
         self.grace_s = grace_s
         self.max_pending = max_pending
         self.recent_s = recent_s
@@ -127,6 +127,19 @@ class Deduper:
         self._recent = [(k, t) for k, t in self._recent if now - t <= self.recent_s]
         return any(k == key for k, _ in self._recent)
 
+    @staticmethod
+    def _weight(rec: dict) -> tuple:
+        """How much a record is worth keeping when two describe one decode.
+
+        JS8Call answers a decode twice - once with the text and once with a
+        placeholder ("……") for a frame it could not render. Same utc_ms, same
+        offset, same SNR: one transmission. Prefer the DIRECTED record, then
+        the one whose text actually contains alphanumerics, then the longer.
+        """
+        text = rec.get("text") or ""
+        alnum = sum(1 for ch in text if ch.isalnum())
+        return (rec.get("kind") == "directed", alnum, len(text))
+
     def add(self, rec: dict, now: float | None = None) -> list[dict]:
         now = time.time() if now is None else now
         rec = dict(rec)
@@ -134,7 +147,7 @@ class Deduper:
         key = self._key(rec)
         for i, old in enumerate(self._pending):
             if self._key(old) == key:
-                if rec["kind"] == "directed" and old["kind"] != "directed":
+                if self._weight(rec) > self._weight(old):
                     self._pending[i] = rec
                 self.dropped_duplicates += 1
                 return self.flush(now)
@@ -284,6 +297,10 @@ class Sink:
 
     def want_text(self, rec: dict) -> bool:
         if rec.get("heartbeat") and not self.cfg.get("heartbeats_in_text"):
+            return False
+        # A frame JS8Call could not render as text ("……") is noise in the human
+        # log; it stays in the JSONL and SQLite where nothing is lost.
+        if not any(ch.isalnum() for ch in (rec.get("text") or "")):
             return False
         floor = self.cfg.get("snr_min_text")
         if floor is not None and isinstance(rec.get("snr"), int) and rec["snr"] < floor:

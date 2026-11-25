@@ -7,10 +7,6 @@ SOURCES
   stick by serial, "no supported device" = kernel dvb_usb_rtl28xxu holding it.
 - USB sound card line input: should work already by naming the device in
   config (input_device), but it has never been run against real hardware.
-- WebSDR helper: FEASIBLE, recipe verified against n8mdp.ddns.net:8904
-  (see "WebSDR helper, verified" below). Not built yet. Costs a Chromium in
-  the offline bundle (~300 MB), which is why it is optional rather than part
-  of the core installer.
 
 TUNING
 - Band scan/hop for SDR sources: step the JS8 calling frequencies
@@ -48,40 +44,3 @@ PACKAGING
 Are the verbs and arguments identical (where appropriate) to morse-logger?
 The install.sh prompt for a path on morse-logger uses the user home, not the
 sudo user.
-
-WebSDR helper, verified 2026-11-25 against http://n8mdp.ddns.net:8904/
-------------------------------------------------------------------------
-Tested with the operator's own settings (7078.00 kHz, USB-wide, volume 4/5,
-2.80 kHz @ -6dB / 3.26 kHz @ -60dB) and it decodes real JS8 traffic: a frame
-of our own plus an off-air "KF0LSL: VE2JXH STATUS?" at SNR -7, coh 100.
-Level on the cable was -10 to -15 dBFS.
-
-Recipe that worked (headless Chrome, no visible window):
-
-  Xvfb :97 -screen 0 1400x1000x24
-  DISPLAY=:97 chrome --user-data-dir=/tmp/wsdr --no-first-run --no-sandbox \
-      --disable-gpu --autoplay-policy=no-user-gesture-required \
-      --remote-debugging-port=9224 --remote-allow-origins='*' \
-      "http://<host>:<port>/?f=7078usb"
-
-  then, over CDP (Runtime.evaluate):
-    setfreq(7078)                 # the ?f= URL parameter was IGNORED by this
-                                  # server, so set it explicitly
-    setmf('usb', 0.15, 2.86)      # the USB-wide button's own arguments; the
-                                  # page then prints 2.80/3.26 kHz for -6/-60dB
-    chrome_audio_start()          # opens the audio; without --remote-allow-
-                                  # origins the CDP websocket is refused (403)
-
-  then move its sink-input to js8call-logger_cable.
-
-Traps worth remembering:
-- HTML5 must be selected for Sound, not Java. This page defaults to Java, and
-  chrome_audio_start() then does nothing and the stream stays silent.
-- Chrome's stream is named "Google Chrome", so a second logger with
-  route_apps=['Google Chrome'] will steal it every few seconds. Share instead
-  (route-audio --source <other>_cable.monitor) or stop that logger.
-- The WebSDR's own JS is copyright PA3FWM and its licence forbids
-  redistribution and reverse engineering. Automating a browser we launch is
-  fine; do not ship a re-implementation of their websocket audio protocol.
-- The stream is what the page renders: volume slider at 0 dB gave -10 dBFS,
-  a bit hot for JS8; trim with the page slider or pactl set-sink-input-volume.

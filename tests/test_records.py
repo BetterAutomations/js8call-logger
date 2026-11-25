@@ -223,3 +223,51 @@ class SinkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlaceholderDuplicateTest(unittest.TestCase):
+    """A decode answered twice: real text plus JS8Call's "……" placeholder.
+
+    Observed on 2026-11-25 13:39:43 at 7.078 MHz, offset 1152, SNR -24: the
+    same utc_ms arrived twice, ~20 s apart, once with text and once with the
+    placeholder. One transmission, one log line, and the line keeps the text.
+    """
+
+    BASE = {"kind": "activity", "utc_ms": 1795631983375, "dial": 7078000,
+            "offset": 1152, "snr": -24, "src": "", "dst": "",
+            "ts": "2026-11-25 13:39:43"}
+
+    def test_late_placeholder_is_dropped(self):
+        d = records.Deduper(grace_s=2.0)          # default 60 s memory
+        out = d.add(dict(self.BASE, text="HEY! ARE YOU ON T"), now=100.0)
+        out += d.flush(now=102.5)                 # written already
+        out += d.add(dict(self.BASE, text="\u2026\u2026"), now=122.0)
+        out += d.flush(now=140.0)
+        self.assertEqual([r["text"] for r in out], ["HEY! ARE YOU ON T"])
+        self.assertEqual(d.dropped_duplicates, 1)
+
+    def test_placeholder_does_not_replace_text(self):
+        d = records.Deduper(grace_s=2.0)
+        d.add(dict(self.BASE, text="\u2026\u2026"), now=100.0)
+        d.add(dict(self.BASE, text="HEY! ARE YOU ON T"), now=101.0)
+        out = d.flush(now=110.0)
+        self.assertEqual([r["text"] for r in out], ["HEY! ARE YOU ON T"])
+
+    def test_placeholder_never_reaches_the_text_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = config.ensure_dirs(config.paths(tmp))
+            sink = records.Sink(p, dict(config.DEFAULTS))
+            rec = dict(self.BASE, text="\u2026\u2026")
+            rec["coherence"] = 0
+            sink.write(rec, records.render(rec))
+            sink.close()
+            path = os.path.join(p["logs"], "js8call-logger-2026-11-25.txt")
+            text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+            jsonl = open(os.path.join(p["logs"], "js8call-logger.jsonl"),
+                         encoding="utf-8").read()
+            self.assertNotIn("\u2026\u2026", text)
+            self.assertIn("\u2026\u2026", jsonl)
+
+
+if __name__ == "__main__":
+    unittest.main()
