@@ -1,0 +1,44 @@
+FIXME
+
+Things knowingly not built yet. Newest at the top.
+
+SOURCES
+- RTL-SDR input: rtl_fm -M usb | pacat into js8call-logger_cable, select
+  stick by serial, "no supported device" = kernel dvb_usb_rtl28xxu holding it.
+- USB sound card line input: should work already by naming the device in
+  config (input_device), but it has never been run against real hardware.
+- WebSDR helper: open our own browser on Xvfb at a given URL, click
+  "Audio start", move its stream onto the cable. Today tuning the WebSDR is
+  manual; this would make `js8call-logger start --websdr <url>` one command.
+
+TUNING
+- Band scan/hop for SDR sources: step the JS8 calling frequencies
+  (3.578 / 7.078 / 10.130 / 14.078 / 18.104 / 21.078 / 24.922 / 28.078 MHz),
+  score candidates by decodes per minute, keep the best. Needs an SDR we can
+  retune; useless for a WebSDR tap or a line input, where the receiver is the
+  operator's.
+- Decode-depth / multi-decoder tuning: measure decodes per minute at each
+  setting and keep the best, the way morse-logger tunes WPM.
+- Input-level trimming with pactl set-source-volume: currently we only warn
+  about clipping and a dead cable.
+
+CLOCK
+- clock --set: write the measured offset into the system clock (needs root).
+- Continuous slew: deliberately not built; it fights systemd-timesyncd and
+  moving the clock under a running JS8Call upsets its slot scheduler.
+- Bootstrap when the clock is more than ~2 s off: measure the phase of the
+  15 s audio bursts and phase-lock before any decode can succeed.
+- Absolute date/time cannot come from JS8 at all (frames carry sub-15 s
+  phase, not a date). If that is ever needed, it is a GPS puck, not this.
+
+LOG
+- Abbreviation/glossary expansion in the style of morse-logger (token[word]).
+  JS8 text is mostly plain English, so this is low value compared to CW.
+- Conversations split by group (@ALLCALL, @SITREP...) rather than only by
+  correspondent.
+- Retention/pruning policy for old logs and the SQLite file.
+
+PACKAGING
+- GLIBC fallback build (JS8Call 2.5.2 / Qt5 / PortAudio) for distros older
+  than glibc 2.38. Not needed for the target machine (Lubuntu 26.10).
+- Flatpak, as morse-logger eventually wants.

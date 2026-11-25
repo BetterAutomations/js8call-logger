@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run js8call-logger straight from the checkout, no install needed.
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m js8call_logger.cli "$@"

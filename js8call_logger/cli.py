@@ -1,0 +1,469 @@
+"""js8call-logger command line.
+
+Verbs are hyphenated, output is one fact per line, and explanations belong in
+the README rather than in status output.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+from . import api, clock, config, engine, records
+
+APP = config.APP
+_STOP = {"now": False}
+
+
+# --------------------------------------------------------------- utilities
+def _pct_int(v):
+    return None if v is None else int(v)
+
+
+def _daily_path(p: dict, day: str, kind: str) -> str:
+    if kind == "jsonl":
+        return os.path.join(p["logs"], "js8call-logger.jsonl")
+    return os.path.join(p["logs"], f"js8call-logger-{day}.txt")
+
+
+def _path_fn(p: dict, day: str | None, kind: str):
+    def fn():
+        d = day or time.strftime("%Y-%m-%d")
+        return _daily_path(p, d, kind)
+    return fn
+
+
+def _install_stop_handlers():
+    def _stop(_sig, _frm):
+        _STOP["now"] = True
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _stop)
+        except (ValueError, OSError):
+            pass
+
+
+def _follow_lines(path_fn, poll=0.5, start_at_end=True):
+    """Yield complete lines, surviving midnight rollover and truncation.
+
+    Four ways a naive tail goes quiet forever, all handled: the filename is
+    re-resolved every poll (daily files), a half-written line is held back,
+    a smaller size or a new inode restarts from zero, and positions are byte
+    offsets on a binary handle.
+    """
+    path = path_fn()
+    ino, pos, tail = None, 0, b""
+    try:
+        st = os.stat(path)
+        ino, pos = st.st_ino, (st.st_size if start_at_end else 0)
+    except OSError:
+        pass
+    backoff = poll
+    while not _STOP["now"]:
+        p = path_fn()
+        try:
+            st = os.stat(p)
+        except OSError:
+            if not _STOP["now"]:
+                time.sleep(backoff)
+            continue
+        if p != path or st.st_ino != ino:
+            path, ino, pos, tail = p, st.st_ino, 0, b""
+        elif st.st_size < pos:
+            pos, tail = 0, b""
+        if st.st_size > pos:
+            try:
+                with open(p, "rb") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+            except OSError:
+                time.sleep(backoff)
+                continue
+            data = tail + chunk
+            cut = data.rfind(b"\n")
+            if cut >= 0:
+                tail = data[cut + 1:]
+                for line in data[:cut + 1].splitlines():
+                    if line:
+                        yield line.decode("utf-8", "replace")
+            else:
+                tail = data
+        else:
+            time.sleep(backoff)
+
+
+def _rec_passes(rec: dict, args) -> bool:
+    """The one filter predicate, shared by the dump and the follow loop."""
+    if not getattr(args, "all", False) and rec.get("heartbeat"):
+        return False
+    if getattr(args, "min_snr", None) is not None:
+        snr = rec.get("snr")
+        if snr is None or snr < args.min_snr:
+            return False
+    if getattr(args, "station", None):
+        want = args.station.upper()
+        if want not in ((rec.get("src") or "").upper(),
+                        (rec.get("dst") or "").upper()):
+            return False
+    return True
+
+
+# -------------------------------------------------------------------- verbs
+def cmd_start(args):
+    cfg = config.load()
+    if args.foreground:
+        eng = engine.Engine(cfg)
+        try:
+            return eng.run()
+        except engine.EngineError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    p = config.ensure_dirs()
+    if engine.read_pid(p) and engine._alive(engine.read_pid(p)):
+        print("already running")
+        return 0
+    log = open(os.path.join(p["run"], "daemon.log"), "ab", buffering=0)
+    subprocess.Popen([sys.executable, "-m", "js8call_logger.cli", "start",
+                      "--foreground"], stdout=log, stderr=log,
+                     stdin=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(120):
+        time.sleep(0.5)
+        st = engine.read_status(p)
+        if st.get("running"):
+            print("started")
+            return 0
+        if st.get("error"):
+            print(f"error: {st['error']}")
+            return 1
+    print("started (no status yet; see run/daemon.log)")
+    return 0
+
+
+def cmd_stop(_args):
+    p = config.ensure_dirs()
+    stopped = engine.stop(p)
+    print("stopped" if stopped else "not running")
+    return 0
+
+
+def cmd_status(_args):
+    p = config.ensure_dirs()
+    st = engine.read_status(p)
+    cfg = config.load(create=False)
+    running = bool(engine.read_pid(p) and engine._alive(engine.read_pid(p)))
+    print(f"service      {'running' if running else 'stopped'}")
+    if not running:
+        return 0
+    print(f"decoder      {'up' if st.get('decoder_pid') else 'down'}")
+    print(f"decodes      {st.get('decodes', 0)}")
+    last = st.get("last_decode_s_ago")
+    print(f"last decode  {('never' if last is None else str(last) + 's ago')}")
+    print(f"restarts     {st.get('restarts', 0)}")
+    off = st.get("clock_offset")
+    samples = st.get("clock_samples", 0)
+    if off is None or samples < 3:
+        print(f"clock offset -- (needs 3 decodes, have {samples})")
+    else:
+        print(f"clock offset {off:+.2f}s from {samples} decodes")
+    print(f"dial         {st.get('dial_hz', cfg.get('dial_hz'))} Hz")
+    print(f"api          {cfg.get('api_host')}:{cfg.get('api_port')}")
+    return 0
+
+
+def cmd_tail(args):
+    p = config.ensure_dirs()
+    cfg = config.load(create=False)
+
+    if args.js8call_debug:
+        return _tail_debug(cfg)
+
+    kind = "jsonl" if (args.json or args.min_snr is not None or args.station) else "text"
+    day = args.date or time.strftime("%Y-%m-%d")
+    path = _daily_path(p, day, kind)
+
+    if kind == "text":
+        if os.path.exists(path):
+            with open(path, errors="replace") as f:
+                lines = f.readlines()
+            if not args.all:
+                lines = [ln for ln in lines if not records.HEARTBEAT_RE.search(ln)]
+            sys.stdout.write("".join(lines[-args.lines:]))
+            sys.stdout.flush()
+        elif not args.follow:
+            print(f"(no log for {day} yet: {path})")
+            return 1
+        if args.follow:
+            _install_stop_handlers()
+            for line in _follow_lines(_path_fn(p, args.date, "text"), start_at_end=True):
+                if not args.all and records.HEARTBEAT_RE.search(line):
+                    continue
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
+        return 0
+
+    rows = []
+    if os.path.exists(path):
+        with open(path, errors="replace") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if (rec.get("ts") or "")[:10] != day:
+                    continue
+                if _rec_passes(rec, args):
+                    rows.append(rec)
+    for rec in rows[-args.lines:]:
+        print(json.dumps(rec, ensure_ascii=False))
+    if not args.follow:
+        return 0
+    _install_stop_handlers()
+    for line in _follow_lines(_path_fn(p, None, "jsonl"), start_at_end=True):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if _rec_passes(rec, args):
+            print(json.dumps(rec, ensure_ascii=False), flush=True)
+    return 0
+
+
+def _tail_debug(cfg):
+    """Print raw API frames, unfiltered, with local receive time."""
+    client = api.Js8Api(cfg["api_host"], int(cfg["api_port"]))
+    try:
+        client.connect(3.0)
+    except (OSError, api.ApiError):
+        print(f"no API at {cfg['api_host']}:{cfg['api_port']} - is the logger running?")
+        return 1
+    _install_stop_handlers()
+    print("-- raw JS8Call API frames (Ctrl-C to stop)", flush=True)
+    try:
+        while not _STOP["now"]:
+            for frame in client.read(0.5):
+                stamp = time.strftime("%H:%M:%S")
+                line = json.dumps(frame, ensure_ascii=False)
+                print(f"{stamp} {frame.get('type', '?')} {line}", flush=True)
+    except api.ApiError as exc:
+        print(f"API closed: {exc}")
+        return 1
+    return 0
+
+
+def cmd_clock(args):
+    p = config.ensure_dirs()
+    st = engine.read_status(p)
+    off = st.get("clock_offset")
+    if off is None:
+        print("no clock measurement yet (needs decodes)")
+        return 1
+    print(f"offset       {off:+.2f}s from {st.get('clock_samples', 0)} decodes")
+    if args.set:
+        ok, note = clock.apply_system(float(off), dry_run=args.dry_run)
+        print(("ok           " if ok else "failed       ") + note)
+        return 0 if ok else 1
+    return 0
+
+
+def cmd_tune(args):
+    cfg = config.load()
+    ok, why = engine.cable_present(cfg)
+    print(f"cable        {'up' if ok else 'missing'}")
+    if why:
+        print(f"             {why}")
+    client = api.Js8Api(cfg["api_host"], int(cfg["api_port"]))
+    try:
+        client.connect(3.0)
+    except (OSError, api.ApiError):
+        print("api          not reachable (start the logger first)")
+        return 1
+    freq = client.get_freq()
+    print(f"dial         {freq.get('DIAL')} Hz")
+    print(f"offset       {freq.get('OFFSET')} Hz")
+    print(f"version      {client.version() or '?'}")
+    if args.dial:
+        client.set_freq(int(args.dial), args.offset)
+        print(f"set          {args.dial} Hz + {args.offset} Hz")
+    return 0
+
+
+def cmd_doctor(_args):
+    p = config.ensure_dirs()
+    cfg = config.load()
+    checks = []
+
+    def chk(name, ok, detail=""):
+        checks.append(ok)
+        print(f"{'ok  ' if ok else 'FAIL'} {name:<22} {detail}")
+
+    chk("python", sys.version_info >= (3, 10), sys.version.split()[0])
+    ok, why = engine.cable_present(cfg)
+    # not a failure: `start` creates the pair on first run
+    print(f"{'ok  ' if ok else 'note'} {'cable':<22} "
+          f"{cfg['cable'] if ok else why + ' (start creates it)'}")
+    try:
+        binary = engine.find_binary(cfg)
+        chk("decoder binary", True, binary)
+    except engine.EngineError as exc:
+        chk("decoder binary", False, str(exc))
+    try:
+        s = socket.socket()
+        s.bind((cfg["api_host"], int(cfg["api_port"])))
+        s.close()
+        chk("api port free", True, str(cfg["api_port"]))
+    except OSError:
+        chk("api port free", False, f"{cfg['api_port']} in use (already running?)")
+    st = engine.read_status(p)
+    print(f"note {'service':<22} {'running' if st.get('running') else 'stopped'}")
+    return 0 if all(checks) else 1
+
+
+def cmd_selftest(args):
+    """Offline checks of the log pipeline; --live also proves the decoder."""
+    fails = 0
+
+    def chk(name, ok, detail=""):
+        nonlocal fails
+        if not ok:
+            fails += 1
+        print(f"{'ok  ' if ok else 'FAIL'} {name:<26} {detail}")
+
+    rec = {"ts": "2026-11-25 02:38:00", "dial": 14078000, "snr": 33,
+           "offset": 1500, "src": "N0CALL", "dst": "@ALLCALL",
+           "text": "CQ CQ CQ EM48 " * 20, "kind": "directed", "utc_ms": 1,
+           "heartbeat": False}
+    lines = records.render(rec, 150)
+    chk("wrap<=150", all(len(ln) <= 150 for ln in lines), f"{len(lines)} lines, "
+        f"max {max(len(ln) for ln in lines)}")
+    chk("continuation ts", all(ln.startswith("2026-11-25 02:38:00")
+                               for ln in lines), "same timestamp on every line")
+    long_tok = {"ts": "2026-11-25 02:38:00", "dial": 14078000, "snr": 1,
+                "offset": 1500, "src": "A1AA", "dst": "B2BB",
+                "text": "x" * 400, "kind": "directed", "utc_ms": 2,
+                "heartbeat": False}
+    lt = records.render(long_tok, 150)
+    chk("oversize token", all(len(ln) <= 150 for ln in lt), f"{len(lt)} lines")
+
+    d = records.Deduper(grace_s=2.0)
+    act = {"kind": "activity", "utc_ms": 5, "dial": 1, "offset": 2, "text": "a"}
+    dir_ = {"kind": "directed", "utc_ms": 5, "dial": 1, "offset": 2, "text": "b"}
+    held = d.add(act, now=0) + d.add(dir_, now=0.1)
+    out = held + d.flush(now=3.0)
+    chk("dedupe pair", len(out) == 1 and out[0]["kind"] == "directed",
+        f"{len(out)} record(s)")
+
+    hb = records.parse_event({"type": "RX.DIRECTED", "value": "K1ABC: @HB HEARTBEAT",
+                              "params": {"FROM": "K1ABC", "TO": "@HB", "CMD": " HEARTBEAT",
+                                         "TEXT": "", "UTC": 1000}})
+    chk("heartbeat detect", bool(hb and hb["heartbeat"]))
+
+    if getattr(args, "live", False):
+        fails += _selftest_live(chk)
+    return 0 if fails == 0 else 1
+
+
+def _selftest_live(chk) -> int:
+    """Play a known JS8 frame into the cable and wait for it to be logged.
+
+    This is the check that proves the whole chain on the target machine: the
+    bundled decoder runs, the cable carries audio, the API answers and the
+    record reaches the log. It needs the logger running.
+    """
+    cfg = config.load(create=False)
+    p = config.ensure_dirs()
+    fixture = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "tests", "fixtures", "n0call-cq.raw")
+    if not os.path.exists(fixture):
+        chk("live decode", False, f"fixture missing: {fixture}")
+        return 1
+    ok, why = engine.cable_present(cfg)
+    if not ok:
+        chk("live decode", False, why)
+        return 1
+    st = engine.read_status(p)
+    if not st.get("running"):
+        chk("live decode", False, "logger is not running (js8call-logger start)")
+        return 1
+    before = int(st.get("decodes") or 0)
+    # JS8 frames begin on a 15 s boundary; start just after one.
+    time.sleep(max(0, (int(time.time() // 15) + 1) * 15 - time.time()))
+    with open(fixture, "rb") as f:
+        subprocess.run(["pacat", "--device=" + cfg["cable"], "--rate=48000",
+                        "--channels=1", "--format=s16le", "--raw"], stdin=f)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if int(engine.read_status(p).get("decodes") or 0) > before:
+            chk("live decode", True, "frame decoded and logged")
+            return 0
+        time.sleep(1)
+    chk("live decode", False, "nothing decoded in 30 s (audio path or clock)")
+    return 1
+
+
+# --------------------------------------------------------------------- main
+def build_parser():
+    ap = argparse.ArgumentParser(prog=APP, description="Headless JS8 logger")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("start", help="start the logger")
+    sp.add_argument("-f", "--foreground", action="store_true")
+    sp.set_defaults(func=cmd_start)
+
+    sp = sub.add_parser("stop", help="stop the logger")
+    sp.set_defaults(func=cmd_stop)
+
+    sp = sub.add_parser("status", help="service status")
+    sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("tail", help="show the log")
+    sp.add_argument("-f", "--follow", action="store_true")
+    sp.add_argument("-n", "--lines", type=int, default=20)
+    sp.add_argument("--date", help="YYYY-MM-DD (default today)")
+    sp.add_argument("--json", action="store_true", help="JSONL view")
+    sp.add_argument("--all", action="store_true", help="include heartbeats")
+    sp.add_argument("--min-snr", type=_pct_int, help="hide weaker decodes")
+    sp.add_argument("--station", help="only this callsign")
+    sp.add_argument("--js8call-debug", action="store_true",
+                    help="print raw API frames")
+    sp.set_defaults(func=cmd_tail)
+
+    sp = sub.add_parser("tune", help="show/change dial frequency")
+    sp.add_argument("--dial", type=int)
+    sp.add_argument("--offset", type=int, default=1500)
+    sp.set_defaults(func=cmd_tune)
+
+    sp = sub.add_parser("clock", help="report or apply the clock offset")
+    sp.add_argument("--set", action="store_true", help="write the system clock")
+    sp.add_argument("--dry-run", action="store_true")
+    sp.set_defaults(func=cmd_clock)
+
+    sp = sub.add_parser("doctor", help="check the environment")
+    sp.set_defaults(func=cmd_doctor)
+
+    sp = sub.add_parser("selftest", help="offline pipeline checks")
+    sp.add_argument("--live", action="store_true",
+                    help="play a known frame into the cable (logger must be running)")
+    sp.set_defaults(func=cmd_selftest)
+    return ap
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except engine.EngineError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

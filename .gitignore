@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+bundle/JS8Call.AppImage
+*.db
+*.jsonl
