@@ -638,11 +638,15 @@ def cmd_doctor(_args):
     appimage = os.path.join(here, "bundle", "JS8Call.AppImage")
     binary = cfg.get("js8call_binary")
     if binary and os.path.exists(binary):
-        note("decoder installed", binary)
+        # An installed copy always has this; it is a fact, so it is a check.
+        chk("decoder installed", True, binary)
     elif os.path.exists(appimage):
+        # Running from a checkout: the bundle is the decoder, and the Decoder
+        # section has already verified it. Informational, not a failure.
         note("offline bundle", f"{appimage} "
-             f"({os.path.getsize(appimage) // (1024 ** 2)} MB)")
+             f"({os.path.getsize(appimage) // (1024 ** 2)} MB, not unpacked)")
     else:
+        # Do not double-count: a missing decoder is already [FAIL] above.
         warn("offline bundle", "bundle/JS8Call.AppImage missing - run "
              "refresh-bundle.sh before installing on a machine without network")
 
