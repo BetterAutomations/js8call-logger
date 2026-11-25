@@ -149,7 +149,7 @@ ways, and they are alternatives:
 | `js8call-logger route-audio --copy` | copies whatever plays on your speakers into the cable | nothing is rerouted, no app has to be remembered, but it copies *everything* and follows your speaker volume |
 | `js8call-logger route-audio --all` | moves every playing stream to the cable | the WebSDR is the only thing playing |
 | `js8call-logger route-audio --list` then `--index N` | moves that one stream | you want the browser only and music left on the speakers |
-| `js8call-logger route-audio --source NAME` | loops a **hardware input** (line in, aux, USB sound card) into the cable | a receiver is wired into the sound card — see `--list-sources` |
+| `js8call-logger route-audio --source NAME` | loops a **capture source** into the cable: a hardware input, or another program's output | a receiver on the sound card, or sharing audio with another logger — see `--list-sources` |
 
 `cable up` (also run by `start`) creates the null sink and its remap source and
 turns monitoring on, so you still hear the WebSDR through the speakers;
@@ -160,6 +160,17 @@ Monitoring (cable → speakers) and the copy loop (speakers → cable) are the s
 loop wired twice: together they run away to 0 dBFS and the decoder hears
 nothing but clipping. The logger refuses that combination and tells you which
 one to turn off instead of picking for you.
+
+**Two loggers, one receiver.** If another program already owns the audio — say
+morse-logger listening to the same browser tab — do not move the stream back
+and forth; loop that program's output into our cable instead. Nothing is
+stolen, and the other tool's own routing watch keeps working:
+
+    js8call-logger route-audio --list-sources          # shows other outputs too
+    js8call-logger route-audio --source morse-logger_cable.monitor
+
+Stop it with `route-audio --stop-source`. `doctor` is the quickest way to see
+which of the two cables a stream is actually on.
 
 **Routing sticks after the first time.** `route-audio` remembers which
 applications it saw, and while the logger runs it moves those applications'

@@ -177,11 +177,29 @@ def _monitor_active() -> bool:
 
 
 def _is_tap_block(block: str) -> bool:
+    """True only for the speakers->cable copy loop.
+
+    Not every loopback into the cable is the tap: a hardware input loop, or a
+    loop from another program's cable, is also "loopback -> our sink". The tap
+    is specifically the default sink's monitor being copied into the cable, so
+    that is what gets matched; without a known default sink fall back to the
+    old, looser test.
+    """
     if "module-loopback" not in block:
         return False
     if f"{SINK}.monitor" in block:          # cable -> speakers
         return False
-    return f"sink={SINK}" in block or f"sink_name={SINK}" in block
+    if not (f"sink={SINK}" in block or f"sink_name={SINK}" in block):
+        return False
+    m = re.search(r"(?:^|\s)source=([^\s]+)", block)
+    src = m.group(1) if m else ""
+    try:
+        dst = default_sink_name()
+    except PulseError:
+        dst = ""
+    if dst:
+        return src == f"{dst}.monitor"
+    return src.endswith(".monitor")
 
 
 def _tap_active() -> bool:
@@ -289,8 +307,27 @@ def source_names():
     return out
 
 
+def monitor_sources():
+    """Other programs' outputs (monitors), excluding our own cable.
+
+    Looping one of these into our cable is how two decoders share one audio
+    stream without either of them stealing it from the other.
+    """
+    out = []
+    for r in sources():
+        if len(r) < 2:
+            continue
+        name = r[1].strip()
+        if not name.endswith(".monitor"):
+            continue
+        if name in (SINK + ".monitor", SOURCE) or "js8call-logger" in name:
+            continue
+        out.append(name)
+    return out
+
+
 def loop_source(name: str, state_file=None, latency_ms=40) -> bool:
-    if name not in source_names():
+    if name not in source_names() and name not in monitor_sources():
         raise PulseError(f"no such capture source: {name}\n"
                          "see 'js8call-logger route-audio --list-sources'")
     for _mid, block in _module_blocks():
@@ -309,8 +346,14 @@ def stop_source_loops(state_file=None):
         if "module-loopback" not in block or f"sink={SINK}" not in block:
             continue
         m = re.search(r"(?:^|\s)source=([^\s]+)", block)
-        if not m or ".monitor" in m.group(1):
-            continue                     # the speakers tap, not a line input
+        if not m:
+            continue
+        try:
+            dst = default_sink_name()
+        except PulseError:
+            dst = ""
+        if dst and m.group(1) == f"{dst}.monitor":
+            continue                     # the speakers tap, not a source loop
         _run(["pactl", "unload-module", mid], check=False)
         killed.append(mid)
     _forget_modules(killed, state_file)

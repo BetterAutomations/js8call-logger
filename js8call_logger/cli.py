@@ -352,14 +352,20 @@ def cmd_route(args):
     wants_source = bool(args.source or args.stop_source)
 
     if args.list_sources:
-        names = pulse.source_names()
-        if not names:
-            print("no hardware capture sources found (only monitors and the cable)")
+        hw = pulse.source_names()
+        mon = pulse.monitor_sources()
+        if hw:
+            print("  hardware inputs you can loop into the cable:")
+            for n in hw:
+                print(f"    {n}")
+        if mon:
+            print("  other programs' outputs (copied into the cable, nothing moved):")
+            for n in mon:
+                print(f"    {n}")
+        if not hw and not mon:
+            print("no capture sources found (only monitors and the cable)")
             return 0
-        print("  hardware inputs you can loop into the cable:")
-        for n in names:
-            print(f"    {n}")
-        print("\n  use: js8call-logger route-audio --source NAME")
+        print(f"\n  use: {APP} route-audio --source NAME")
         return 0
 
     if wants_source and (wants_move or wants_copy):
@@ -587,9 +593,13 @@ def cmd_doctor(_args):
                 print(f"       send it over with: {APP} route-audio --all   "
                       f"(--index N for one stream, --copy to leave it where it is)")
         for r in rows:
-            kind = "monitor" if pulse.is_own_loopback(r) else "source"
-            print(f"  [ok] {r.get('app')} -> {kind} (stream {r.get('index')})")
-        real = [r for r in rows if not pulse.is_own_loopback(r)]
+            # A loopback *into* our cable is a feed (the speakers tap, a
+            # hardware input, or another program's cable); the cable->speakers
+            # monitor lives on the speakers sink and never appears here.
+            kind = "feed (loopback)" if pulse.is_own_loopback(r) else "source"
+            who = r.get("app") if r.get("app") != "?" else (r.get("stream") or "?")
+            print(f"  [ok] {who} -> {kind} (stream {r.get('index')})")
+        real = rows
         if real and pulse.cable_status().get("source"):
             sample = pulse.capture_samples(1.0, rate=8000)
             if not any(sample):
