@@ -44,6 +44,48 @@ def available() -> bool:
     return bool(shutil.which("pactl")) and bool(shutil.which("parec"))
 
 
+def server_info() -> dict:
+    p = _run(["pactl", "info"], check=False)
+    info = {}
+    for line in p.stdout.decode(errors="replace").splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            info[k.strip()] = v.strip()
+    return info
+
+
+def capture_samples(seconds: float = 1.0, rate: int = 8000,
+                    source: str | None = None) -> bytes:
+    """Capture raw s16le mono PCM from the cable (silence detection, levels)."""
+    src = source or SOURCE
+    if not source_exists(src) and not src.endswith(".monitor"):
+        src = f"{SINK}.monitor"
+    args = ["parec", f"--device={src}", f"--rate={rate}", "--channels=1",
+            "--format=s16le", "--raw", "--latency-msec=20"]
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        data = p.stdout.read(int(rate * 2 * seconds))
+    finally:
+        p.terminate()
+        try:
+            p.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    return data or b""
+
+
+def peak_dbfs(data: bytes) -> float:
+    """Peak level of s16le audio in dBFS (0 = full scale)."""
+    if not data:
+        return -120.0
+    import array
+    import math
+    a = array.array("h")
+    a.frombytes(data[: len(data) // 2 * 2])
+    peak = max((abs(v) for v in a), default=0)
+    return round(20 * math.log10(max(1, peak) / 32768.0), 1)
+
+
 def _run(args, timeout=10, check=True):
     exe = shutil.which(args[0])
     if not exe:

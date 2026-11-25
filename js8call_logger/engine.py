@@ -311,7 +311,8 @@ class Engine:
             if pulse.cable_status().get("monitor"):
                 print("monitoring on: the cable is also playing on your speakers",
                       flush=True)
-            write_status(self.p, running=True, channels=len(self.decoders),
+            write_status(self.p, running=True, started_at=time.time(),
+                         channels=len(self.decoders),
                          decoders=[d.describe() for d in self.decoders],
                          decodes=0, restarts=0, clock_offset=0.0)
         except Exception as exc:

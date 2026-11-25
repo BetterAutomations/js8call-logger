@@ -9,12 +9,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
-import socket
 import subprocess
 import sys
 import time
 
+from . import __version__
 from . import api, clock, config, engine, pulse, records
 
 APP = config.APP
@@ -492,35 +493,161 @@ def cmd_tune(args):
     return 0
 
 
+def fmt_uptime(seconds) -> str:
+    s = int(seconds or 0)
+    h, m = divmod(s // 60, 60)
+    return f"{h}h{m:02d}m" if h else f"{m:02d}m{s % 60:02d}s"
+
+
 def cmd_doctor(_args):
+    """Report on the whole installation, like morse-logger's doctor.
+
+    Sections matter: a flat list hides the difference between "the decoder is
+    missing" and "audio is arriving but nothing is logging". Only [FAIL] lines
+    affect the exit status - [!!] is a warning, [--] is information.
+    """
     p = config.ensure_dirs()
     cfg = config.load()
-    checks = []
+    print(f"{APP} {__version__}  home {p['home']}")
+    ok = True
 
-    def chk(name, ok, detail=""):
-        checks.append(ok)
-        print(f"{'ok  ' if ok else 'FAIL'} {name:<22} {detail}")
+    def chk(name, good, detail=""):
+        nonlocal ok
+        ok = ok and bool(good)
+        print(f"  [{'ok' if good else 'FAIL'}] {name}"
+              + (f" - {detail}" if detail else ""))
 
-    chk("python", sys.version_info >= (3, 10), sys.version.split()[0])
-    ok, why = engine.cable_present(cfg)
-    # not a failure: `start` creates the pair on first run
-    print(f"{'ok  ' if ok else 'note'} {'cable':<22} "
-          f"{cfg['cable'] if ok else why + ' (start creates it)'}")
-    try:
-        binary = engine.find_binary(cfg)
-        chk("decoder binary", True, binary)
-    except engine.EngineError as exc:
-        chk("decoder binary", False, str(exc))
-    try:
-        s = socket.socket()
-        s.bind((cfg["api_host"], int(cfg["api_port"])))
-        s.close()
-        chk("api port free", True, str(cfg["api_port"]))
-    except OSError:
-        chk("api port free", False, f"{cfg['api_port']} in use (already running?)")
+    def note(name, detail=""):
+        print(f"  [--] {name}" + (f" - {detail}" if detail else ""))
+
+    def warn(name, detail=""):
+        print(f"  [!!] {name}" + (f" - {detail}" if detail else ""))
+
     st = engine.read_status(p)
-    print(f"note {'service':<22} {'running' if st.get('running') else 'stopped'}")
-    return 0 if all(checks) else 1
+    running = bool(engine.read_pid(p) and engine._alive(engine.read_pid(p)))
+
+    print("\nData")
+    if os.path.abspath(p["logs"]).startswith(os.path.abspath(p["home"]) + os.sep):
+        print(f"  [ok] log directory {p['logs']}")
+    else:
+        print(f"  [!!] log directory {p['logs']} is outside the data directory "
+              f"{p['home']} - old logs look lost when they are not")
+    try:
+        du = shutil.disk_usage(p["home"])
+        chk("free disk space", du.free > 200 * 1024 * 1024,
+            f"{du.free // (1024 ** 2)} MB free")
+    except OSError:
+        pass
+    if st.get("restarts", 0) > 5:
+        warn("decoder restarts", f"{st['restarts']} times this session - something "
+             f"is stopping it from staying up; see {p['run']}/restarts.log")
+
+    print("\nDecoder")
+    try:
+        chk("js8call binary", True, engine.find_binary(cfg))
+    except engine.EngineError as exc:
+        chk("js8call binary", False, str(exc))
+    chk("pactl", shutil.which("pactl"), "pulseaudio-utils / pipewire-pulse")
+    chk("parec", shutil.which("parec"), "pulseaudio-utils / pipewire-pulse")
+    chk("pacat", shutil.which("pacat"), "needed by selftest")
+    chk("python", sys.version_info >= (3, 10), sys.version.split()[0])
+
+    print("\nAudio server")
+    if pulse.available():
+        try:
+            info = pulse.server_info()
+            chk("pulse/pipewire server", True,
+                f"{info.get('Server Name', '?')} {info.get('Server Version', '')}".strip())
+        except pulse.PulseError as exc:
+            chk("pulse/pipewire server", False, str(exc))
+        cst = pulse.cable_status()
+        chk("virtual cable", cst["sink"] and cst["source"],
+            f"sink={cst['sink']} source={cst['source']} monitor={cst['monitor']} "
+            f"(create with: {APP} cable up)")
+    else:
+        chk("pulse/pipewire server", False, "pactl/parec not found")
+
+    print("\nAudio into the cable")
+    try:
+        rows = [r for r in pulse.sink_input_details()
+                if r.get("sink_name") == pulse.sink_name(1)]
+        if not rows:
+            note("nothing is playing into the cable yet")
+        for r in rows:
+            kind = "monitor" if pulse.is_own_loopback(r) else "source"
+            print(f"  [ok] {r.get('app')} -> {kind} (stream {r.get('index')})")
+        real = [r for r in rows if not pulse.is_own_loopback(r)]
+        if real and pulse.cable_status().get("source"):
+            sample = pulse.capture_samples(1.0, rate=8000)
+            if not any(sample):
+                warn("digital silence", "the streams are open but delivering zeros - "
+                     "the application has lost the audio device; restart it fully "
+                     "(a tab reload is not enough)")
+            else:
+                db = pulse.peak_dbfs(sample)
+                if db < -30:
+                    warn(f"cable level {db} dBFS", "far too quiet to decode; raise the "
+                         "volume (aim for -20 to -10 dBFS)")
+                elif db > -1.5:
+                    warn(f"cable level {db} dBFS", "clipping; lower the volume")
+                else:
+                    print(f"  [ok] cable level {db} dBFS")
+        if real and not running:
+            warn("nothing is logging", f"{len(real)} stream(s) on the cable but the "
+                 f"logger is not running ({APP} start)")
+    except pulse.PulseError as exc:
+        note("could not inspect", str(exc))
+
+    print("\nLogger")
+    if running:
+        print(f"  [ok] logger running - pid {engine.read_pid(p)}")
+    else:
+        note("logger running", f"not running (start it with: {APP} start)")
+    decs = st.get("decoders") or []
+    for d in decs:
+        chk(f"decoder {d.get('channel')}", d.get("up"),
+            f"port {d.get('port')}"
+            + ("" if d.get("up") else f" - not responding, see {p['run']}/js8call-"
+               f"{d.get('channel')}.log"))
+    if running and decs:
+        port = int(decs[0].get("port") or cfg["api_port"])
+        client = api.Js8Api(cfg["api_host"], port)
+        try:
+            client.connect(2.0)
+            chk("api responding", True,
+                f"JS8Call {client.version() or '?'} on {cfg['api_host']}:{port}")
+        except (OSError, api.ApiError):
+            chk("api responding", False, f"nothing answered on {cfg['api_host']}:{port}")
+        finally:
+            client.close()
+        print(f"       decodes logged: {st.get('decodes', 0)}  uptime "
+              f"{fmt_uptime(time.time() - st.get('started_at', time.time()))}")
+        last = st.get("last_decode_s_ago")
+        print("       last decode: "
+              + ("never" if last is None else f"{last}s ago"))
+        samples = st.get("clock_samples", 0)
+        if samples >= 3:
+            print(f"       clock offset: {st.get('clock_offset', 0):+.2f}s "
+                  f"from {samples} decodes")
+        else:
+            print(f"       clock offset: needs 3 decodes, have {samples}")
+    print(f"       log dir: {p['logs']}")
+
+    print("\nInstallation")
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    appimage = os.path.join(here, "bundle", "JS8Call.AppImage")
+    binary = cfg.get("js8call_binary")
+    if binary and os.path.exists(binary):
+        note("decoder installed", binary)
+    elif os.path.exists(appimage):
+        note("offline bundle", f"{appimage} "
+             f"({os.path.getsize(appimage) // (1024 ** 2)} MB)")
+    else:
+        warn("offline bundle", "bundle/JS8Call.AppImage missing - run "
+             "refresh-bundle.sh before installing on a machine without network")
+
+    print("\n" + ("All checks passed." if ok else "Some checks FAILED (see above)."))
+    return 0 if ok else 1
 
 
 def cmd_selftest(args):

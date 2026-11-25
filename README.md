@@ -80,6 +80,12 @@ still decode. Turn all three off in the WebSDR or the receiver.
 | log file grows but `tail -f` is silent | heartbeats and SNR filter are hiding it | `tail --all` |
 | copy stops after a browser reload | the reloaded stream went back to the speakers | move it onto the cable again |
 
+Start with `js8call-logger doctor`. It reports one line per fact in sections —
+data, decoder, audio server, audio into the cable (including the measured dBFS
+level and digital silence), logger, installation — marking each `[ok]`,
+`[!!]` for a warning, `[--]` for information and `[FAIL]` for something that
+must be fixed. It exits non-zero only when something actually failed.
+
 `js8call-logger tail --js8call-debug` shows the raw frames arriving from the
 decoder, which separates "the decoder is struggling" from "our log is
 filtering something".
@@ -171,7 +177,7 @@ Commands
 
 | command | meaning |
 |---|---|
-| `js8call-logger doctor` | check the installation, cable, decoder and API port |
+| `js8call-logger doctor` | full report: data dir, decoder, audio server, cable, what is playing into it and at what level, logger state, bundle |
 | `js8call-logger selftest [--offline]` | check the log pipeline **and** decode a known frame into the cable (starts the logger if needed, stops it again); `--offline` skips the decode |
 | `js8call-logger cable up\|down\|status` | manage the virtual audio cable (`--no-monitor`, `--channels N` runs N decoders) |
 | `js8call-logger route-audio [--list\|--all\|--index N\|--copy\|--stop-copy\|--source NAME\|--list-sources\|--stop-source] [--to N]` | get audio onto the cable |
