@@ -42,3 +42,6 @@ PACKAGING
 - GLIBC fallback build (JS8Call 2.5.2 / Qt5 / PortAudio) for distros older
   than glibc 2.38. Not needed for the target machine (Lubuntu 26.10).
 - Flatpak, as morse-logger eventually wants.
+
+== Christopher's notes==
+Are the verbs and arguments identical (where appropriate) to morse-logger?

@@ -19,6 +19,9 @@ Quick start
        ./install.sh                 # to /opt/js8call-logger, needs sudo
        ./install.sh --prefix ~/.local   # user-local, no sudo
 
+   It asks where the logs should live (default ~/js8call-logger) when run from
+   a terminal; set JS8CALL_LOGGER_HOME or pipe an answer to skip the prompt.
+
 2. Point some audio at the cable. For a WebSDR, play the page in your browser
    and move the stream onto the cable:
 

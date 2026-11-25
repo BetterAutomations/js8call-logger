@@ -34,6 +34,20 @@ if sys.version_info < (3, 10):
     sys.exit("python3 >= 3.10 required, found " + sys.version.split()[0])
 PY
 
+# Ask where the logs should live, the way morse-logger does. Only when there
+# is a terminal: a piped or unattended run takes the default silently.
+data_default=$HOME/js8call-logger
+data_home=${JS8CALL_LOGGER_HOME:-$data_default}
+if [ -t 0 ]; then
+    printf 'JS8 logger data directory [%s]: ' "$data_default"
+    read -r answer || true
+    [ -n "${answer:-}" ] && data_home=$answer
+fi
+case "$data_home" in
+    "~/"*) data_home=$HOME/${data_home#"~/"} ;;
+esac
+mkdir -p "$data_home"
+
 echo "installing to $dest"
 $sudo mkdir -p "$dest" "$bindir"
 $sudo rm -rf "$dest/js8call_logger"
@@ -69,7 +83,7 @@ EOF
 $sudo chmod 755 "$bindir/js8call-logger"
 
 # First-run config, only if the user has none yet.
-home=${JS8CALL_LOGGER_HOME:-$HOME/js8call-logger}
+home=$data_home
 mkdir -p "$home"
 if [ ! -f "$home/config.json" ] && [ -n "$decoder" ]; then
     python3 - "$home/config.json" "$decoder" <<'PY'
@@ -80,4 +94,5 @@ PY
     echo "wrote $home/config.json"
 fi
 
-echo "done. Next: js8call-logger doctor && js8call-logger start"
+echo "done. logs will go to $home"
+echo "Next: js8call-logger doctor && js8call-logger start"
