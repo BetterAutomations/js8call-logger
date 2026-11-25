@@ -23,6 +23,10 @@ DEFAULTS = {
     "cable": APP + "_cable",          # null sink; source is <cable>_src
     "input_device": None,             # None -> "<cable>_src"
     "cable_rate": 48000,
+    "monitor": True,                  # hear the cable on the speakers
+    "tap": False,                     # copy the speakers into the cable instead
+    "route_apps": [],                 # apps route-audio should keep on the cable
+    "route_watch": True,              # re-route those apps when they reload
     # decoder / API
     "api_host": "127.0.0.1",
     "api_port": 2442,

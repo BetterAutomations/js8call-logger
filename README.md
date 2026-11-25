@@ -29,11 +29,10 @@ Quick start
 
     # Have clear JS8 audio playing: a WebSDR page, or a receiver on line-in.
     sudo ./install.sh                 # Asks where the data directory goes
-    pactl list sink-inputs            # find the browser's stream
-    pactl move-sink-input <idx> js8call-logger_cable
-    js8call-logger start              # create the cable if needed, start decoding
-    js8call-logger tail -f            # watch it decode
-    js8call-logger status             # service, decoder, decodes, clock offset
+    js8call-logger route-audio --all  # Send whatever is playing to the cable
+    js8call-logger start              # Create the cable if needed, start decoding
+    js8call-logger tail -f            # Watch it decode
+    js8call-logger status             # Service, decoder, decodes, clock offset
     js8call-logger stop
 
 That is the whole WebSDR workflow. The receiver stays yours to tune: JS8Call
@@ -134,25 +133,38 @@ Running from a checkout with no install needs nothing extra:
 Routing audio into the cable
 ----------------------------
 
-`pactl move-sink-input <idx> js8call-logger_cable` moves one playing stream.
-`pactl list sink-inputs` finds it; match on `application.name` and
-`media.name`, and check the `Sink:` line with `pactl list short sinks` before
-assuming it is already there (it prints an index, not a name).
+The logger drives `pactl` for you; nothing needs to be typed by hand.
+`route-audio --all` is the usual choice: it moves every playing stream onto the
+cable, which is right when the browser is the only thing making noise. Four
+ways, and they are alternatives:
 
-To keep hearing it yourself while the logger listens, tap the output instead of
-moving it:
+| command | what happens | when |
+|---|---|---|
+| `js8call-logger route-audio --copy` | copies whatever plays on your speakers into the cable | nothing is rerouted, no app has to be remembered, but it copies *everything* and follows your speaker volume |
+| `js8call-logger route-audio --all` | moves every playing stream to the cable | the WebSDR is the only thing playing |
+| `js8call-logger route-audio --list` then `--index N` | moves that one stream | you want the browser only and music left on the speakers |
+| `js8call-logger route-audio --source NAME` | loops a **hardware input** (line in, aux, USB sound card) into the cable | a receiver is wired into the sound card — see `--list-sources` |
 
-    pactl load-module module-loopback source=<default_sink>.monitor \
-        sink=js8call-logger_cable latency_msec=40
+`cable up` (also run by `start`) creates the null sink and its remap source and
+turns monitoring on, so you still hear the WebSDR through the speakers;
+`cable up --no-monitor` leaves your speakers alone and `cable down` removes the
+whole cable. `cable status` lists the sinks and sources it found.
 
-Never route a loopback of the cable back into the cable: that closes a loop
-which pins the input at 0 dBFS, and a clipped signal looks to the decoder like
-a strong signal that never resolves.
+Monitoring (cable → speakers) and the copy loop (speakers → cable) are the same
+loop wired twice: together they run away to 0 dBFS and the decoder hears
+nothing but clipping. The logger refuses that combination and tells you which
+one to turn off instead of picking for you.
 
-Browsers are not sticky about audio routing. Chrome ignores `PULSE_SINK`; a
-reload, a restart or an idle tab sends the new stream back to the default
-output, and the logger then hears silence and looks broken. Move it again after
-any of those.
+**Routing sticks after the first time.** `route-audio` remembers which
+applications it saw, and while the logger runs it moves those applications'
+new streams back onto the cable every few seconds — so reloading the WebSDR tab
+no longer means going deaf. Set `"route_watch": false` in config.json to stop
+that.
+
+`route-audio` never moves the logger's own monitor loopback: that would feed the
+cable into itself and pin the input at 0 dBFS. Browsers remain awkward even so —
+Chrome ignores `PULSE_SINK`, and a full browser restart is sometimes the only
+way to get a new stream at all.
 
 Commands
 --------
@@ -161,9 +173,11 @@ Commands
 |---|---|
 | `js8call-logger doctor` | check the installation, cable, decoder and API port |
 | `js8call-logger selftest [--live]` | check the log pipeline; `--live` plays a known frame into the cable |
+| `js8call-logger cable up\|down\|status` | manage the virtual audio cable (`--no-monitor`, `--channels N`) |
+| `js8call-logger route-audio [--list\|--all\|--index N\|--copy\|--stop-copy\|--source NAME\|--list-sources\|--stop-source] [--to N]` | get audio onto the cable |
 | `js8call-logger start [-f]` | start in the background (`-f` stays in the foreground) |
 | `js8call-logger stop` | stop the logger and the decoder it owns |
-| `js8call-logger status` | service, decoder, decodes, last decode, restarts, clock offset |
+| `js8call-logger status [--json]` | service, decoder, decodes, last decode, restarts, clock offset |
 | `js8call-logger tail [-n N] [-f]` | read the text log; `-f` follows it |
 | `js8call-logger tail --json` | JSONL view with every field |
 | `js8call-logger tail --js8call-debug` | raw frames from the decoder's API, unfiltered |
@@ -244,7 +258,8 @@ be repaired from the air; set the date once by hand.
 What `start` does by itself
 ---------------------------
 
-1. Checks and, if necessary, creates the null sink and its remap source.
+1. Checks and, if necessary, creates the null sink and its remap source, with
+   monitoring on so you still hear the receiver through the speakers.
 2. Writes `js8call/JS8Call.ini` from config.json — callsign, grid, audio
    device, dial, TCP API on 127.0.0.1:2442, reporting and update checks off.
 3. Launches the decoder with `QT_QPA_PLATFORM=offscreen` and its own
@@ -254,6 +269,8 @@ What `start` does by itself
    correspondent files.
 6. Restarts the decoder if it dies, logging each restart in
    `run/restarts.log`, and keeps `run/status.json` current for `status`.
+7. Every few seconds, puts the streams of applications `route-audio` saw back
+   onto the cable, so a browser reload does not leave the decoder deaf.
 
 Only one daemon can run per data directory: it holds a lock, because two would
 fight over port 2442 and silently log nothing.

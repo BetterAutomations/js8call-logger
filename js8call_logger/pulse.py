@@ -1,0 +1,352 @@
+r"""Virtual audio cable management via pactl/parec, ported from morse-logger.
+
+The cable is a null sink plus a remapped source: any program can play into the
+sink, and the decoder captures from the source, without touching the system
+default devices.
+
+    program --play--> [ js8call-logger_cable ] --monitor--> [ ..._src ] --> decoder
+                                  \--> loopback --> speakers (optional)
+
+Two loops must never both exist. "monitor" carries cable -> speakers so you
+still hear what is being decoded; "tap" carries speakers -> cable so nothing has
+to be rerouted. Together they are one loop wired twice and run away to 0 dBFS,
+which looks to the decoder like a strong signal that never resolves.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+
+SINK = "js8call-logger_cable"
+SOURCE = SINK + "_src"
+SINK_DESC = "JS8 logger virtual cable"
+SOURCE_DESC = "JS8 logger cable source"
+
+
+class PulseError(RuntimeError):
+    pass
+
+
+def sink_name(channel: int = 1) -> str:
+    return SINK if channel <= 1 else f"{SINK}_{channel}"
+
+
+def source_name(channel: int = 1) -> str:
+    return SOURCE if channel <= 1 else f"{SINK}_src_{channel}"
+
+
+def available() -> bool:
+    return bool(shutil.which("pactl")) and bool(shutil.which("parec"))
+
+
+def _run(args, timeout=10, check=True):
+    exe = shutil.which(args[0])
+    if not exe:
+        raise PulseError(f"'{args[0]}' not found. Install pulseaudio-utils / pipewire-pulse.")
+    try:
+        p = subprocess.run(args, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise PulseError(f"timeout running: {' '.join(args)}") from exc
+    if check and p.returncode != 0:
+        raise PulseError(f"{' '.join(args)}: {p.stderr.decode(errors='replace').strip()}")
+    return p
+
+
+def _rows(kind: str):
+    p = _run(["pactl", "list", "short", kind], check=False)
+    return [line.split("\t") for line in p.stdout.decode(errors="replace").splitlines()]
+
+
+def sinks():
+    return _rows("sinks")
+
+
+def sources():
+    return _rows("sources")
+
+
+def sink_inputs():
+    return _rows("sink-inputs")
+
+
+def sink_exists(name: str = SINK) -> bool:
+    return any(len(r) > 1 and r[1] == name for r in sinks())
+
+
+def source_exists(name: str = SOURCE) -> bool:
+    return any(len(r) > 1 and r[1] == name for r in sources())
+
+
+def default_sink_name() -> str:
+    p = _run(["pactl", "get-default-sink"], check=False)
+    return p.stdout.decode().strip()
+
+
+def cable_channels() -> list[int]:
+    names = {r[1] for r in sinks() if len(r) > 1}
+    return [ch for ch in range(1, 9) if sink_name(ch) in names]
+
+
+def _load_module(args, state_file=None) -> str:
+    mid = _run(["pactl", "load-module", *args]).stdout.decode().strip()
+    if state_file:
+        data = {}
+        if os.path.exists(state_file):
+            try:
+                with open(state_file) as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                data = {}
+        data.setdefault("modules", []).append(mid)
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        with open(state_file, "w") as f:
+            json.dump(data, f, indent=2)
+    return mid
+
+
+def _forget_modules(ids, state_file):
+    if not state_file or not os.path.exists(state_file):
+        return
+    try:
+        with open(state_file) as f:
+            data = json.load(f)
+        data["modules"] = [m for m in data.get("modules", []) if m not in ids]
+        with open(state_file, "w") as f:
+            json.dump(data, f, indent=2)
+    except (OSError, ValueError):
+        pass
+
+
+def _module_blocks():
+    p = _run(["pactl", "list", "modules"], check=False)
+    out = []
+    for block in p.stdout.decode(errors="replace").split("\nModule #")[1:]:
+        out.append((block.split("\n", 1)[0].strip(), block))
+    return out
+
+
+def _monitor_active() -> bool:
+    return any("module-loopback" in b and f"{SINK}.monitor" in b for _m, b in _module_blocks())
+
+
+def _is_tap_block(block: str) -> bool:
+    if "module-loopback" not in block:
+        return False
+    if f"{SINK}.monitor" in block:          # cable -> speakers
+        return False
+    return f"sink={SINK}" in block or f"sink_name={SINK}" in block
+
+
+def _tap_active() -> bool:
+    return any(_is_tap_block(b) for _m, b in _module_blocks())
+
+
+def ensure_cable(state_file=None, monitor=False, rate=48000, tap=False, channel=1) -> dict:
+    """Create the cable if missing. Returns what was done."""
+    sink, source = sink_name(channel), source_name(channel)
+    done = {"sink": False, "source": False, "monitor": False, "tap": False,
+            "monitor_skipped": False, "channel": channel}
+    if monitor and (tap or _tap_active()):
+        monitor = False
+        done["monitor_skipped"] = True
+    if not sink_exists(sink):
+        _load_module(["module-null-sink", f"sink_name={sink}",
+                      f'sink_properties=device.description="{SINK_DESC}"',
+                      f"rate={rate}"], state_file)
+        done["sink"] = True
+        for _ in range(20):
+            if sink_exists(sink):
+                break
+            time.sleep(0.1)
+    if not source_exists(source):
+        try:
+            _load_module(["module-remap-source", f"master={sink}.monitor",
+                          f"source_name={source}",
+                          f'source_properties=device.description="{SOURCE_DESC}"'],
+                         state_file)
+            done["source"] = True
+        except PulseError:
+            done["source"] = False       # the .monitor source still works
+    if tap and not _tap_active():
+        dst = default_sink_name()
+        if dst and dst != sink:
+            _load_module(["module-loopback", f"source={dst}.monitor", f"sink={sink}",
+                          "latency_msec=40", "source_dont_move=true",
+                          "sink_dont_move=true"], state_file)
+            done["tap"] = True
+    if monitor and not _monitor_active():
+        dst = default_sink_name()
+        if dst and dst != sink:
+            _load_module(["module-loopback", f"source={sink}.monitor", f"sink={dst}",
+                          "latency_msec=60"], state_file)
+            done["monitor"] = True
+    return done
+
+
+def stop_monitor(state_file=None):
+    killed = [m for m, b in _module_blocks()
+              if "module-loopback" in b and f"{SINK}.monitor" in b]
+    for mid in killed:
+        _run(["pactl", "unload-module", mid], check=False)
+    _forget_modules(killed, state_file)
+    return killed
+
+
+def stop_tap(state_file=None):
+    killed = [m for m, b in _module_blocks() if _is_tap_block(b)]
+    for mid in killed:
+        _run(["pactl", "unload-module", mid], check=False)
+    _forget_modules(killed, state_file)
+    return killed
+
+
+def modules_for_channel(channel: int):
+    names = [sink_name(channel), sink_name(channel) + ".monitor", source_name(channel)]
+    out = []
+    for mid, block in _module_blocks():
+        for name in names:
+            if re.search(r"(?:sink_name|source_name|master|sink|source)=%s(?:\s|$)"
+                         % re.escape(name), block):
+                out.append(mid)
+                break
+    return out
+
+
+def cable_down(state_file=None, channel=None):
+    removed = stop_monitor(state_file) + stop_tap(state_file)
+    targets = [channel] if channel else (cable_channels() or [1])
+    for ch in targets:
+        for mid in modules_for_channel(ch):
+            _run(["pactl", "unload-module", mid], check=False)
+            removed.append(mid)
+    _forget_modules(removed, state_file)
+    if state_file and os.path.exists(state_file):
+        try:
+            os.unlink(state_file)
+        except OSError:
+            pass
+    return removed
+
+
+def source_names():
+    """Hardware capture devices worth looping: not monitors, not our cable."""
+    out = []
+    for r in sources():
+        if len(r) < 2:
+            continue
+        name = r[1].strip()
+        if (not name or name.endswith(".monitor") or name == SOURCE
+                or name == SINK + ".monitor" or "cable" in name.lower()):
+            continue
+        out.append(name)
+    return out
+
+
+def loop_source(name: str, state_file=None, latency_ms=40) -> bool:
+    if name not in source_names():
+        raise PulseError(f"no such capture source: {name}\n"
+                         "see 'js8call-logger route-audio --list-sources'")
+    for _mid, block in _module_blocks():
+        if (f"source={name}" in block and f"sink={SINK}" in block
+                and "module-loopback" in block):
+            return False
+    _load_module(["module-loopback", f"source={name}", f"sink={SINK}",
+                  f"latency_msec={latency_ms}", "source_dont_move=true",
+                  "sink_dont_move=true"], state_file)
+    return True
+
+
+def stop_source_loops(state_file=None):
+    killed = []
+    for mid, block in _module_blocks():
+        if "module-loopback" not in block or f"sink={SINK}" not in block:
+            continue
+        m = re.search(r"(?:^|\s)source=([^\s]+)", block)
+        if not m or ".monitor" in m.group(1):
+            continue                     # the speakers tap, not a line input
+        _run(["pactl", "unload-module", mid], check=False)
+        killed.append(mid)
+    _forget_modules(killed, state_file)
+    return killed
+
+
+def parse_sink_inputs(text: str, sink_names: dict | None = None) -> list[dict]:
+    """Parse `pactl list sink-inputs` into [{index, sink, sink_name, app, stream}]."""
+    sink_names = sink_names or {}
+    out = []
+    for block in text.split("Sink Input #")[1:]:
+        idx = block.split("\n", 1)[0].strip()
+        info = {"index": int(idx) if idx.isdigit() else idx, "sink": "?",
+                "sink_name": "?", "app": "?", "stream": ""}
+        for line in block.splitlines():
+            line = line.strip()
+            if line.startswith("Sink:"):
+                info["sink"] = line.split(":", 1)[1].strip()
+                info["sink_name"] = sink_names.get(info["sink"], info["sink"])
+            elif line.startswith("application.name ="):
+                info["app"] = line.split("=", 1)[1].strip().strip('"')
+            elif line.startswith("media.name ="):
+                info["stream"] = line.split("=", 1)[1].strip().strip('"')
+        out.append(info)
+    return out
+
+
+def sink_input_details():
+    p = _run(["pactl", "list", "sink-inputs"], check=False)
+    return parse_sink_inputs(p.stdout.decode(errors="replace"),
+                             {r[0]: r[1] for r in sinks() if len(r) > 1})
+
+
+def is_own_loopback(row) -> bool:
+    """Our own loopback streams must never be moved into the cable."""
+    return (row.get("stream") or "").startswith("loopback-")
+
+
+def route_sink_inputs(target: str = SINK, indices=None):
+    moved, skipped = [], []
+    for row in sink_input_details():
+        idx = str(row["index"])
+        label = row["app"] if row["app"] != "?" else row["stream"]
+        if indices and idx not in [str(i) for i in indices]:
+            continue
+        if is_own_loopback(row):
+            skipped.append((idx, label, "js8call-logger's own monitor loopback"))
+            continue
+        if row.get("sink_name") == target:
+            skipped.append((idx, label, "already on the cable"))
+            continue
+        p = _run(["pactl", "move-sink-input", idx, target], check=False)
+        if p.returncode == 0:
+            moved.append((idx, label))
+    return moved, skipped
+
+
+def route_new_streams(target: str = SINK, apps=(), known=()):
+    """Re-route streams from remembered apps; routing is not sticky."""
+    moved = []
+    apps = {a for a in apps if a}
+    for row in sink_input_details():
+        idx = str(row["index"])
+        if row.get("sink_name") == target or is_own_loopback(row):
+            continue
+        app = row["app"] if row["app"] != "?" else row["stream"]
+        if app not in apps or idx in known:
+            continue
+        p = _run(["pactl", "move-sink-input", idx, target], check=False)
+        if p.returncode == 0:
+            moved.append((idx, app))
+            known.add(idx)
+    return moved, known
+
+
+def cable_status() -> dict:
+    return {"sink": sink_exists(), "source": source_exists(),
+            "monitor": _monitor_active(), "tap": _tap_active(),
+            "channels": cable_channels(),
+            "sinks": [r[1] for r in sinks() if len(r) > 1],
+            "sources": [r[1] for r in sources() if len(r) > 1]}

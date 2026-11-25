@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 
-from . import api, clock, config, records
+from . import api, clock, config, pulse, records
 
 APP = config.APP
 
@@ -85,40 +85,30 @@ def find_binary(cfg: dict) -> str:
 
 def cable_present(cfg: dict) -> tuple[bool, str]:
     """True when the null sink and its remap source both exist."""
-    sink, src = cfg["cable"], cfg["cable"] + "_src"
-    if not shutil.which("pactl"):
-        return False, "pactl not found (is PipeWire or PulseAudio running?)"
-    out = subprocess.run(["pactl", "list", "short", "sources"],
-                         capture_output=True, text=True).stdout
-    have = {line.split("\t")[1] for line in out.splitlines() if "\t" in line}
-    missing = [n for n in (sink + ".monitor", src) if n not in have]
-    if missing:
-        return False, f"missing audio source(s): {', '.join(missing)}"
-    return True, ""
+    st = pulse.cable_status()
+    if st["sink"] and st["source"]:
+        return True, ""
+    missing = []
+    if not st["sink"]:
+        missing.append(pulse.SINK)
+    if not st["source"]:
+        missing.append(pulse.SOURCE)
+    return False, "missing audio source(s): " + ", ".join(missing)
 
 
-def ensure_cable(cfg: dict) -> str:
-    ok, why = cable_present(cfg)
-    if ok:
+def ensure_cable(cfg: dict, state_file: str | None = None) -> str:
+    """Create the cable if missing; returns a short note when it did."""
+    st = pulse.cable_status()
+    if st["sink"] and st["source"]:
         return ""
-    sink, src = cfg["cable"], cfg["cable"] + "_src"
-    rate = int(cfg.get("cable_rate") or 48000)
-    if shutil.which("pactl") is None:
-        raise EngineError(why)
-    r = subprocess.run(
-        ["pactl", "load-module", "module-null-sink", f"sink_name={sink}",
-         f"sink_properties=device.description={sink}", f"rate={rate}"],
-        capture_output=True, text=True)
-    if r.returncode != 0:
-        raise EngineError(f"cannot create null sink {sink}: {r.stderr.strip()}")
-    subprocess.run(
-        ["pactl", "load-module", "module-remap-source", f"master={sink}.monitor",
-         f"source_name={src}", f"source_properties=device.description={src}"],
-        capture_output=True, text=True)
-    ok, why = cable_present(cfg)
-    if not ok:
-        raise EngineError(why)
-    return f"created {sink} and {src}"
+    done = pulse.ensure_cable(state_file=state_file,
+                              monitor=bool(cfg.get("monitor", True)),
+                              rate=int(cfg.get("cable_rate") or 48000),
+                              tap=bool(cfg.get("tap", False)))
+    if not done["sink"] and not done["source"]:
+        raise EngineError("could not create the virtual cable: "
+                          f"{pulse.SINK} / {pulse.SOURCE}")
+    return f"created {pulse.SINK} and {pulse.SOURCE}"
 
 
 def write_status(p: dict, **fields) -> None:
@@ -254,9 +244,12 @@ class Engine:
             f.write(str(os.getpid()))
         self._install_signals()
 
-        note = ensure_cable(self.cfg)
+        self.state_file = os.path.join(self.p["run"], "pulse-modules.json")
+        note = ensure_cable(self.cfg, self.state_file)
         if note:
             print(note, flush=True)
+        if pulse.cable_status().get("monitor"):
+            print("monitoring on: the cable is also playing on your speakers", flush=True)
         try:
             self.spawn()
             self.wait_api()
@@ -271,9 +264,13 @@ class Engine:
             raise
 
         last_status = 0.0
+        last_route = 0.0
         while not self.stop_flag:
             for frame in self._poll():
                 self._handle(frame)
+            if time.time() - last_route > 3:
+                last_route = time.time()
+                self._route_watch()
             for rec in self.deduper.flush():
                 self._emit(rec)
             if self.proc.poll() is not None:
@@ -309,6 +306,36 @@ class Engine:
         if isinstance(rec.get("tdrift"), (int, float)):
             self.clock.add(float(rec["tdrift"]))
         self.sink.write(rec, records.render(rec, int(self.cfg.get("line_chars", 150))))
+
+    def _route_watch(self) -> None:
+        """Keep remembered apps on the cable across reloads.
+
+        Routing is not sticky in PipeWire: a moved stream keeps its destination
+        for that stream's lifetime, so reloading the WebSDR tab drops the audio
+        back to the speakers and the logger goes deaf. `route-audio` records
+        the applications it saw, and this puts their new streams back.
+        """
+        if not self.cfg.get("route_watch", True):
+            return
+        # Re-read the list each time: `route-audio` may have been run while the
+        # daemon is up, and a stale copy would silently stop watching.
+        try:
+            disk = config.load(create=False)
+            self.cfg["route_apps"] = disk.get("route_apps") or []
+            self.cfg["route_watch"] = disk.get("route_watch", True)
+        except Exception:
+            pass
+        apps = self.cfg.get("route_apps") or []
+        if not apps:
+            return
+        try:
+            moved, self._routed = pulse.route_new_streams(
+                apps=apps, known=getattr(self, "_routed", set()))
+        except Exception:                    # never kill the loop over routing
+            return
+        for idx, app in moved:
+            print(f"route: {app} started playing (stream {idx}) - "
+                  "moved it to the cable", flush=True)
 
     def _restart(self) -> None:
         code = self.proc.returncode if self.proc else None

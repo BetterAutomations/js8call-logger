@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from . import api, clock, config, engine, records
+from . import api, clock, config, engine, pulse, records
 
 APP = config.APP
 _STOP = {"now": False}
@@ -153,11 +153,16 @@ def cmd_stop(_args):
     return 0
 
 
-def cmd_status(_args):
+def cmd_status(args):
     p = config.ensure_dirs()
     st = engine.read_status(p)
     cfg = config.load(create=False)
     running = bool(engine.read_pid(p) and engine._alive(engine.read_pid(p)))
+    if getattr(args, "json", False):
+        out = dict(st)
+        out["running"] = running
+        print(json.dumps(out, indent=2, sort_keys=True))
+        return 0
     print(f"service      {'running' if running else 'stopped'}")
     if not running:
         return 0
@@ -230,6 +235,8 @@ def cmd_tail(args):
             rec = json.loads(line)
         except ValueError:
             continue
+        if args.date and (rec.get("ts") or "")[:10] != args.date:
+            continue
         if _rec_passes(rec, args):
             print(json.dumps(rec, ensure_ascii=False), flush=True)
     return 0
@@ -272,6 +279,174 @@ def cmd_clock(args):
     return 0
 
 
+def cmd_cable(args):
+    """Manage the virtual audio cable: up, down, status."""
+    p = config.ensure_dirs()
+    sf = os.path.join(p["run"], "pulse-modules.json")
+    cfg = config.load()
+    if args.action == "up":
+        if not args.no_monitor and pulse._tap_active():
+            print("the copy loop is on (your speakers -> the cable), so monitoring")
+            print("would feed the cable back into your speakers.")
+            print("pick one: 'js8call-logger route-audio --stop-copy' to remove it, "
+                  "or 'js8call-logger cable up --no-monitor'.")
+            return 2
+        removed = pulse.stop_monitor(sf) if args.no_monitor else []
+        channels = max(1, int(getattr(args, "channels", 1) or 1))
+        done = {}
+        for ch in range(1, channels + 1):
+            done = pulse.ensure_cable(state_file=sf, monitor=(not args.no_monitor and ch == 1),
+                                      rate=int(cfg.get("cable_rate") or 48000), channel=ch)
+            print(f"virtual cable {ch}: sink '{pulse.sink_name(ch)}' -> "
+                  f"source '{pulse.source_name(ch)}'")
+        if channels > 1:
+            print("note: the logger decodes channel 1 only; a second channel needs "
+                  "a second decoder (see FIXME.txt)")
+        if done.get("monitor_skipped"):
+            print("monitoring left off: the copy loop is running "
+                  "('js8call-logger route-audio --stop-copy' to remove it)")
+        if removed:
+            print(f"monitoring off ({len(removed)} loopback(s) removed)")
+        if done.get("monitor") or pulse.cable_status()["monitor"]:
+            print("monitoring enabled: you still hear the cable output on your speakers")
+        if done.get("sink"):
+            print("(created just now)")
+        return 0
+    if args.action == "down":
+        only = getattr(args, "channels", 1) if args.channels > 1 else None
+        removed = pulse.cable_down(sf, channel=only)
+        print(f"cable {only} removed ({len(removed)} module(s) unloaded)" if only
+              else f"all cables removed ({len(removed)} module(s) unloaded)")
+        return 0
+    st = pulse.cable_status()
+    print(f"sink   {pulse.SINK}: {'present' if st['sink'] else 'MISSING'}")
+    print(f"source {pulse.SOURCE}: {'present' if st['source'] else 'MISSING'}")
+    print(f"monitor loopback: {'on' if st['monitor'] else 'off'}")
+    print(f"copy loop:        {'on' if st['tap'] else 'off'}")
+    if st["channels"]:
+        print("channels: " + ", ".join(str(c) for c in st["channels"]))
+    print("\nsinks:    " + ", ".join(st["sinks"]))
+    print("sources:  " + ", ".join(st["sources"]))
+    return 0
+
+
+def cmd_route(args):
+    """Get audio onto the cable: move streams, copy the speakers, loop an input."""
+    p = config.ensure_dirs()
+    sf = os.path.join(p["run"], "pulse-modules.json")
+    cfg = config.load()
+    wants_move = bool(args.all or args.index)
+    wants_copy = bool(args.copy or args.stop_copy)
+    wants_source = bool(args.source or args.stop_source)
+
+    if args.list_sources:
+        names = pulse.source_names()
+        if not names:
+            print("no hardware capture sources found (only monitors and the cable)")
+            return 0
+        print("  hardware inputs you can loop into the cable:")
+        for n in names:
+            print(f"    {n}")
+        print("\n  use: js8call-logger route-audio --source NAME")
+        return 0
+
+    if wants_source and (wants_move or wants_copy):
+        print("pick one: --source loops a hardware input; --all/--index move "
+              "playback streams; --copy copies the speakers.")
+        return 2
+
+    if args.source:
+        try:
+            created = pulse.loop_source(args.source, state_file=sf)
+        except pulse.PulseError as exc:
+            print(str(exc))
+            return 2
+        if created:
+            print(f"line input loop on: {args.source} -> the cable")
+            print("the input is still usable by other programs; nothing was moved")
+        else:
+            print(f"already looped: {args.source} is already feeding the cable")
+        return 0
+
+    if args.stop_source:
+        killed = pulse.stop_source_loops(state_file=sf)
+        print(f"line input loop off ({len(killed)} module(s) unloaded)" if killed
+              else "no hardware-input loop was running")
+        return 0
+
+    if wants_copy and wants_move:
+        print("pick one: --copy sends a copy of your speakers to the cable, "
+              "while --all/--index move individual streams.")
+        return 2
+    if args.copy and args.stop_copy:
+        print("pick one: --copy turns the copy on, --stop-copy turns it off.")
+        return 2
+
+    if args.copy:
+        if pulse.cable_status()["monitor"]:
+            print("monitoring is on (cable -> your speakers), so copying your "
+                  "speakers back into the cable would be a feedback loop.")
+            print("pick one: run 'js8call-logger cable up --no-monitor' first, "
+                  "or move streams instead with 'js8call-logger route-audio --all'.")
+            return 2
+        done = pulse.ensure_cable(state_file=sf, monitor=False,
+                                  rate=int(cfg.get("cable_rate") or 48000), tap=True)
+        if done.get("tap") or pulse._tap_active():
+            print("copy on: everything your speakers play now also goes to the cable")
+            print("nothing was moved, so your apps keep playing where they are")
+            return 0
+        print("could not create the copy loop (is the cable up?)")
+        return 1
+
+    if args.stop_copy:
+        n = pulse.stop_tap(sf)
+        print(f"copy off ({len(n)} module(s) unloaded)" if n else "copy was not on")
+        return 0
+
+    if wants_move and pulse._tap_active():
+        print("the copy loop is on, so streams are already being fed to the cable.")
+        print("pick one: 'js8call-logger route-audio --stop-copy' first if you want "
+              "to move streams instead.")
+        return 2
+
+    if args.list:
+        rows = pulse.sink_input_details()
+        if not rows:
+            print("no application audio streams are playing right now")
+            return 0
+        print(f"{'idx':>4}  {'sink':<28} {'app':<20} stream")
+        for r in rows:
+            print(f"{r['index']:>4}  {r['sink_name']:<28} {r['app'][:20]:<20} {r['stream']}")
+        return 0
+
+    target = pulse.sink_name(getattr(args, "to", 1) or 1)
+    picked = [row for row in pulse.sink_input_details()
+              if (not args.index or str(row["index"]) in {str(i) for i in args.index})
+              and not pulse.is_own_loopback(row)]
+    moved, skipped = pulse.route_sink_inputs(target=target, indices=args.index)
+    # Remember the applications whether or not they had to move, so a stream
+    # already on the cable still gets its app watched for reloads.
+    apps = sorted({(row["app"] if row["app"] != "?" else row["stream"])
+                   for row in picked})
+    if apps:
+        cfg["route_apps"] = sorted(set(list(cfg.get("route_apps") or []) + apps))
+        config.save(cfg)
+        print(f"  remembered {', '.join(apps)}: new streams from these apps are "
+              f"routed automatically while js8call-logger runs "
+              f"(config route_watch=false to stop that)")
+    for idx, name in moved:
+        print(f"moved stream {idx} ({name}) to '{target}'")
+    for idx, name, why in skipped:
+        print(f"skipped stream {idx} ({name}) - {why}")
+    if not moved:
+        if any(why == "already on the cable" for _i, _n, why in skipped):
+            print("everything that is playing is already on the cable")
+            return 0
+        print("nothing moved (is the WebSDR/browser actually playing audio?)")
+        return 1
+    return 0
+
+
 def cmd_tune(args):
     cfg = config.load()
     ok, why = engine.cable_present(cfg)
@@ -290,7 +465,10 @@ def cmd_tune(args):
     print(f"version      {client.version() or '?'}")
     if args.dial:
         client.set_freq(int(args.dial), args.offset)
+        cfg["dial_hz"] = int(args.dial)
+        config.save(cfg)
         print(f"set          {args.dial} Hz + {args.offset} Hz")
+        print("saved        dial_hz in config.json (kept across restarts)")
     return 0
 
 
@@ -420,6 +598,7 @@ def build_parser():
     sp.set_defaults(func=cmd_stop)
 
     sp = sub.add_parser("status", help="service status")
+    sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("tail", help="show the log")
@@ -433,6 +612,27 @@ def build_parser():
     sp.add_argument("--js8call-debug", action="store_true",
                     help="print raw API frames")
     sp.set_defaults(func=cmd_tail)
+
+    sp = sub.add_parser("cable", help="manage the virtual audio cable")
+    sp.add_argument("action", choices=["up", "down", "status"])
+    sp.add_argument("--no-monitor", action="store_true",
+                    help="do not play the cable on your speakers")
+    sp.add_argument("--channels", type=int, default=1)
+    sp.set_defaults(func=cmd_cable)
+
+    sp = sub.add_parser("route-audio", help="get audio onto the cable")
+    sp.add_argument("--list", action="store_true", help="list playing streams")
+    sp.add_argument("--all", action="store_true", help="move every stream to the cable")
+    sp.add_argument("--index", type=int, nargs="+", help="move these stream indexes")
+    sp.add_argument("--to", type=int, default=1, help="cable channel (default 1)")
+    sp.add_argument("--copy", action="store_true",
+                    help="copy the speakers into the cable, moving nothing")
+    sp.add_argument("--stop-copy", action="store_true")
+    sp.add_argument("--source", help="loop a hardware input into the cable")
+    sp.add_argument("--stop-source", action="store_true")
+    sp.add_argument("--list-sources", action="store_true",
+                    help="list hardware inputs you can loop")
+    sp.set_defaults(func=cmd_route)
 
     sp = sub.add_parser("tune", help="show/change dial frequency")
     sp.add_argument("--dial", type=int)
