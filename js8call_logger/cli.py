@@ -166,7 +166,15 @@ def cmd_status(args):
     print(f"service      {'running' if running else 'stopped'}")
     if not running:
         return 0
-    print(f"decoder      {'up' if st.get('decoder_pid') else 'down'}")
+    decs = st.get("decoders") or []
+    if decs:
+        up = sum(1 for d in decs if d.get("up"))
+        print(f"decoders     {up}/{len(decs)} up")
+        for d in decs:
+            print(f"  channel {d.get('channel')}  port {d.get('port')}  "
+                  f"{'up' if d.get('up') else 'down'}")
+    else:
+        print("decoder      down")
     print(f"decodes      {st.get('decodes', 0)}")
     last = st.get("last_decode_s_ago")
     print(f"last decode  {('never' if last is None else str(last) + 's ago')}")
@@ -299,9 +307,12 @@ def cmd_cable(args):
                                       rate=int(cfg.get("cable_rate") or 48000), channel=ch)
             print(f"virtual cable {ch}: sink '{pulse.sink_name(ch)}' -> "
                   f"source '{pulse.source_name(ch)}'")
-        if channels > 1:
-            print("note: the logger decodes channel 1 only; a second channel needs "
-                  "a second decoder (see FIXME.txt)")
+        if channels != int(cfg.get("channels") or 1):
+            cfg["channels"] = channels
+            config.save(cfg)
+            running = bool(engine.read_pid(p) and engine._alive(engine.read_pid(p)))
+            print(f"config: channels={channels}"
+                  + (" - restart the logger to run them" if running else ""))
         if done.get("monitor_skipped"):
             print("monitoring left off: the copy loop is running "
                   "('js8call-logger route-audio --stop-copy' to remove it)")
@@ -419,7 +430,15 @@ def cmd_route(args):
             print(f"{r['index']:>4}  {r['sink_name']:<28} {r['app'][:20]:<20} {r['stream']}")
         return 0
 
-    target = pulse.sink_name(getattr(args, "to", 1) or 1)
+    to = int(getattr(args, "to", 1) or 1)
+    try:
+        note = engine.ensure_cable(cfg, sf, to)
+        if note:
+            print(note)
+    except engine.EngineError as exc:
+        print(str(exc))
+        return 2
+    target = pulse.sink_name(to)
     picked = [row for row in pulse.sink_input_details()
               if (not args.index or str(row["index"]) in {str(i) for i in args.index})
               and not pulse.is_own_loopback(row)]
@@ -449,11 +468,12 @@ def cmd_route(args):
 
 def cmd_tune(args):
     cfg = config.load()
-    ok, why = engine.cable_present(cfg)
+    ch = int(getattr(args, "channel", 1) or 1)
+    ok, why = engine.cable_present(cfg, ch)
     print(f"cable        {'up' if ok else 'missing'}")
     if why:
         print(f"             {why}")
-    client = api.Js8Api(cfg["api_host"], int(cfg["api_port"]))
+    client = api.Js8Api(cfg["api_host"], engine.channel_port(cfg, ch))
     try:
         client.connect(3.0)
     except (OSError, api.ApiError):
@@ -464,7 +484,7 @@ def cmd_tune(args):
     print(f"offset       {freq.get('OFFSET')} Hz")
     print(f"version      {client.version() or '?'}")
     if args.dial:
-        client.set_freq(int(args.dial), args.offset)
+        client.set_freq(int(args.dial), args.offset, )
         cfg["dial_hz"] = int(args.dial)
         config.save(cfg)
         print(f"set          {args.dial} Hz + {args.offset} Hz")
@@ -542,17 +562,35 @@ def cmd_selftest(args):
                                          "TEXT": "", "UTC": 1000}})
     chk("heartbeat detect", bool(hb and hb["heartbeat"]))
 
-    if getattr(args, "live", False):
+    if not getattr(args, "offline", False):
         fails += _selftest_live(chk)
     return 0 if fails == 0 else 1
+
+
+def _start_logger() -> bool:
+    """Start the daemon for the duration of a self test. True if we started it."""
+    p = config.ensure_dirs()
+    if engine.read_status(p).get("running"):
+        return False
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ)
+    env["PYTHONPATH"] = here + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    subprocess.run([sys.executable, "-m", "js8call_logger.cli", "start"],
+                   capture_output=True, text=True, env=env)
+    for _ in range(120):
+        time.sleep(0.5)
+        if engine.read_status(p).get("running"):
+            return True
+    return True
 
 
 def _selftest_live(chk) -> int:
     """Play a known JS8 frame into the cable and wait for it to be logged.
 
-    This is the check that proves the whole chain on the target machine: the
-    bundled decoder runs, the cable carries audio, the API answers and the
-    record reaches the log. It needs the logger running.
+    This is the check that proves the whole chain: the bundled decoder runs,
+    the cable carries audio, the API answers and the record reaches the log.
+    It starts the logger if it is not already running, and stops it again
+    afterwards, so a fresh install can be verified with one command.
     """
     cfg = config.load(create=False)
     p = config.ensure_dirs()
@@ -561,28 +599,34 @@ def _selftest_live(chk) -> int:
     if not os.path.exists(fixture):
         chk("live decode", False, f"fixture missing: {fixture}")
         return 1
-    ok, why = engine.cable_present(cfg)
-    if not ok:
-        chk("live decode", False, why)
+    started = _start_logger()
+    try:
+        if not engine.read_status(p).get("running"):
+            chk("live decode", False, "could not start the logger; see run/daemon.log")
+            return 1
+        ok, why = engine.cable_present(cfg, 1)
+        if not ok:
+            chk("live decode", False, why)
+            return 1
+        before = int(engine.read_status(p).get("decodes") or 0)
+        # JS8 frames begin on a 15 s boundary; start just after one.
+        time.sleep(max(0, (int(time.time() // 15) + 1) * 15 - time.time()))
+        with open(fixture, "rb") as f:
+            subprocess.run(["pacat", "--device=" + pulse.sink_name(1),
+                            "--rate=48000", "--channels=1",
+                            "--format=s16le", "--raw"], stdin=f)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if int(engine.read_status(p).get("decodes") or 0) > before:
+                chk("live decode", True, "frame decoded and logged")
+                return 0
+            time.sleep(1)
+        chk("live decode", False,
+            "nothing decoded in 30 s (audio path or clock; see --js8call-debug)")
         return 1
-    st = engine.read_status(p)
-    if not st.get("running"):
-        chk("live decode", False, "logger is not running (js8call-logger start)")
-        return 1
-    before = int(st.get("decodes") or 0)
-    # JS8 frames begin on a 15 s boundary; start just after one.
-    time.sleep(max(0, (int(time.time() // 15) + 1) * 15 - time.time()))
-    with open(fixture, "rb") as f:
-        subprocess.run(["pacat", "--device=" + cfg["cable"], "--rate=48000",
-                        "--channels=1", "--format=s16le", "--raw"], stdin=f)
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        if int(engine.read_status(p).get("decodes") or 0) > before:
-            chk("live decode", True, "frame decoded and logged")
-            return 0
-        time.sleep(1)
-    chk("live decode", False, "nothing decoded in 30 s (audio path or clock)")
-    return 1
+    finally:
+        if started:
+            engine.stop(p)
 
 
 # --------------------------------------------------------------------- main
@@ -637,6 +681,8 @@ def build_parser():
     sp = sub.add_parser("tune", help="show/change dial frequency")
     sp.add_argument("--dial", type=int)
     sp.add_argument("--offset", type=int, default=1500)
+    sp.add_argument("--channel", type=int, default=1,
+                    help="which decoder (default 1)")
     sp.set_defaults(func=cmd_tune)
 
     sp = sub.add_parser("clock", help="report or apply the clock offset")
@@ -647,9 +693,10 @@ def build_parser():
     sp = sub.add_parser("doctor", help="check the environment")
     sp.set_defaults(func=cmd_doctor)
 
-    sp = sub.add_parser("selftest", help="offline pipeline checks")
-    sp.add_argument("--live", action="store_true",
-                    help="play a known frame into the cable (logger must be running)")
+    sp = sub.add_parser("selftest", help="check the log pipeline and decode a frame")
+    sp.add_argument("--offline", action="store_true",
+                    help="skip the decode test (no cable, no decoder)")
+    sp.add_argument("--live", action="store_true", help=argparse.SUPPRESS)
     sp.set_defaults(func=cmd_selftest)
     return ap
 

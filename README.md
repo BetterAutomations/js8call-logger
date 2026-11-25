@@ -111,8 +111,8 @@ The bundle is one file: `bundle/JS8Call.AppImage` (~59 MB, 3.0.3, checksum in
 
     ./refresh-bundle.sh /path/to/JS8Call-v3.0.3-x86_64.AppImage
 
-`tests/fixtures/n0call-cq.raw` is a recorded JS8 frame used by
-`selftest --live`, so a fresh install can prove itself with no radio attached.
+`tests/fixtures/n0call-cq.raw` is a recorded JS8 frame that `selftest` plays
+into the cable, so a fresh install can prove itself with no radio attached.
 
 What is in the repository
 -------------------------
@@ -172,29 +172,46 @@ Commands
 | command | meaning |
 |---|---|
 | `js8call-logger doctor` | check the installation, cable, decoder and API port |
-| `js8call-logger selftest [--live]` | check the log pipeline; `--live` plays a known frame into the cable |
-| `js8call-logger cable up\|down\|status` | manage the virtual audio cable (`--no-monitor`, `--channels N`) |
+| `js8call-logger selftest [--offline]` | check the log pipeline **and** decode a known frame into the cable (starts the logger if needed, stops it again); `--offline` skips the decode |
+| `js8call-logger cable up\|down\|status` | manage the virtual audio cable (`--no-monitor`, `--channels N` runs N decoders) |
 | `js8call-logger route-audio [--list\|--all\|--index N\|--copy\|--stop-copy\|--source NAME\|--list-sources\|--stop-source] [--to N]` | get audio onto the cable |
 | `js8call-logger start [-f]` | start in the background (`-f` stays in the foreground) |
 | `js8call-logger stop` | stop the logger and the decoder it owns |
-| `js8call-logger status [--json]` | service, decoder, decodes, last decode, restarts, clock offset |
+| `js8call-logger status [--json]` | service, decoders (one per channel), decodes, last decode, restarts, clock offset |
 | `js8call-logger tail [-n N] [-f]` | read the text log; `-f` follows it |
 | `js8call-logger tail --json` | JSONL view with every field |
 | `js8call-logger tail --js8call-debug` | raw frames from the decoder's API, unfiltered |
 | `js8call-logger tail --all` | include heartbeats |
 | `js8call-logger tail --min-snr -15` | hide weaker decodes (JSONL view) |
 | `js8call-logger tail --station K1ABC` | only that correspondent |
-| `js8call-logger tune [--dial HZ]` | show or change the dial stamped on new lines |
+| `js8call-logger tune [--dial HZ] [--channel N]` | show or change the dial stamped on new lines |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 
 Many stations at once
 ---------------------
 
-JS8Call decodes every signal in its passband, so a busy 40 m evening arrives as
-many interleaved records from different stations — no second cable, no second
-decoder. The logger keeps the log in transmission order and also writes one
-file per correspondent, plus `GROUP-<NAME>.txt` for group traffic (`@ALLCALL`,
-`@SITREP`, ...), so a single conversation can be read on its own.
+Two different things, and they are not the same problem.
+
+**One receiver, many stations.** JS8Call decodes every signal in its passband,
+so a busy 40 m evening arrives as many interleaved records from different
+stations — no second cable, no second decoder. The logger keeps the log in
+transmission order and also writes one file per correspondent, plus
+`GROUP-<NAME>.txt` for group traffic (`@ALLCALL`, `@SITREP`, ...), so a single
+conversation can be read on its own.
+
+**Several receivers or bands.** `cable up --channels 2` creates a second cable
+pair (`js8call-logger_cable_2` and `..._src_2`), records `channels: 2` in
+config.json, and the next `start` runs one decoder per channel: channel 1 on
+port 2442, channel 2 on 2443, and so on. Each decoder has its own JS8Call
+config, its own log and its own waterfall. Records carry `channel`, and the
+text line gains a `ch2` tag so two bands can be told apart at a glance:
+
+    2026-11-25 08:31:57   7.078MHz +33dB 1500Hz ch2 N0CALL>@ALLCALL ...
+
+Route each receiver onto its own cable (`route-audio --index N --to 2`), and
+set the dial per channel with `tune --dial 14078000 --channel 2`. `cable down`
+removes the cables; set `"channels": 1` in config.json to go back to one
+decoder.
 
 Logs
 ----
@@ -262,8 +279,9 @@ What `start` does by itself
    monitoring on so you still hear the receiver through the speakers.
 2. Writes `js8call/JS8Call.ini` from config.json — callsign, grid, audio
    device, dial, TCP API on 127.0.0.1:2442, reporting and update checks off.
-3. Launches the decoder with `QT_QPA_PLATFORM=offscreen` and its own
-   `XDG_CONFIG_HOME`/`XDG_DATA_HOME` under `~/js8call-logger/js8call/`.
+3. Launches one decoder per channel with `QT_QPA_PLATFORM=offscreen`, each
+   with its own `XDG_CONFIG_HOME`/`XDG_DATA_HOME` under
+   `~/js8call-logger/js8call/chN/` and its own API port.
 4. Waits for the API, confirms the version, sets the dial and offset.
 5. Reads every frame, dedupes, renders, and writes text, JSONL, SQLite and the
    correspondent files.

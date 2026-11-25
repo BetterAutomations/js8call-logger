@@ -1,4 +1,4 @@
-"""Run JS8Call headless and feed its decodes into the log.
+"""Run one JS8Call per cable channel and feed its decodes into the log.
 
 JS8Call is a Qt GUI program, but it decodes perfectly well with no display:
 QT_QPA_PLATFORM=offscreen keeps it invisible while the waterfall, the decoder
@@ -10,6 +10,10 @@ program is configured entirely from our config file - no first-run wizard, no
 clicking. The one key that matters and is easy to miss is AcceptTCPRequests:
 without it the TCP API accepts the connection, reads your commands and answers
 nothing at all, with no error anywhere.
+
+Flowgraph per channel N (N = 1 by default, more with `cable up --channels N`):
+
+    <cable N>_src -> JS8Call offscreen (XDG dir N, port 2442+N-1) -> records
 """
 
 from __future__ import annotations
@@ -18,7 +22,6 @@ import errno
 import fcntl
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -33,11 +36,15 @@ class EngineError(Exception):
     pass
 
 
-def write_ini(cfg: dict, p: dict) -> str:
-    """Write JS8Call.ini from our config; return its path."""
-    conf_dir = os.path.join(p["js8call"], "config-home")
+def channel_port(cfg: dict, channel: int) -> int:
+    return int(cfg["api_port"]) + max(0, channel - 1)
+
+
+def write_ini(cfg: dict, p: dict, channel: int = 1) -> str:
+    """Write channel N's JS8Call.ini; return its path."""
+    conf_dir = os.path.join(p["js8call"], f"ch{channel}", "config-home")
     os.makedirs(conf_dir, exist_ok=True)
-    dev = config.input_device(cfg)
+    dev = pulse.source_name(channel) if channel > 1 else config.input_device(cfg)
     ini = f"""[Configuration]
 MyCall={cfg['mycall']}
 MyGrid={cfg['mygrid']}
@@ -50,7 +57,7 @@ AudioOutputChannel=Mono
 AllowMonitorInputs=true
 TCPEnabled=true
 TCPServer={cfg['api_host']}
-TCPServerPort={int(cfg['api_port'])}
+TCPServerPort={channel_port(cfg, channel)}
 TCPMaxConnections=4
 AcceptTCPRequests=true
 WriteLogs=true
@@ -64,9 +71,11 @@ WaterfallFPS=2
 [MultiSettings]
 CurrentName=Default
 """
-    # JS8Call reads $XDG_CONFIG_HOME/JS8Call.ini, so the ini must live in the
-    # same directory spawn() points the child at - not in a sibling folder.
-    path = os.path.join(conf_dir, "JS8Call.ini")
+    # JS8Call appends the rig name to its settings file, so a second instance
+    # reads "JS8Call - ch2.ini", not JS8Call.ini. Writing the wrong name means
+    # the instance starts with defaults (no TCP port) and looks dead.
+    name = "JS8Call.ini" if channel == 1 else f"JS8Call - ch{channel}.ini"
+    path = os.path.join(conf_dir, name)
     config.write_atomic(path, ini)
     return path
 
@@ -83,32 +92,35 @@ def find_binary(cfg: dict) -> str:
     return cand
 
 
-def cable_present(cfg: dict) -> tuple[bool, str]:
-    """True when the null sink and its remap source both exist."""
+def cable_present(cfg: dict, channel: int = 1) -> tuple[bool, str]:
+    """True when this channel's null sink and remap source both exist."""
     st = pulse.cable_status()
-    if st["sink"] and st["source"]:
+    sink, source = pulse.sink_name(channel), pulse.source_name(channel)
+    if st["sink"] and st["source"] and channel == 1:
         return True, ""
-    missing = []
-    if not st["sink"]:
-        missing.append(pulse.SINK)
-    if not st["source"]:
-        missing.append(pulse.SOURCE)
+    have_sink = sink in st["sinks"]
+    have_source = source in st["sources"]
+    if have_sink and have_source:
+        return True, ""
+    missing = [n for n, ok in ((sink, have_sink), (source, have_source)) if not ok]
     return False, "missing audio source(s): " + ", ".join(missing)
 
 
-def ensure_cable(cfg: dict, state_file: str | None = None) -> str:
-    """Create the cable if missing; returns a short note when it did."""
-    st = pulse.cable_status()
-    if st["sink"] and st["source"]:
+def ensure_cable(cfg: dict, state_file: str | None = None, channel: int = 1) -> str:
+    """Create this channel's cable if missing; returns a note when it did."""
+    ok, _ = cable_present(cfg, channel)
+    if ok:
         return ""
     done = pulse.ensure_cable(state_file=state_file,
-                              monitor=bool(cfg.get("monitor", True)),
+                              monitor=bool(cfg.get("monitor", True)) and channel == 1,
                               rate=int(cfg.get("cable_rate") or 48000),
-                              tap=bool(cfg.get("tap", False)))
+                              tap=bool(cfg.get("tap", False)) and channel == 1,
+                              channel=channel)
     if not done["sink"] and not done["source"]:
-        raise EngineError("could not create the virtual cable: "
-                          f"{pulse.SINK} / {pulse.SOURCE}")
-    return f"created {pulse.SINK} and {pulse.SOURCE}"
+        raise EngineError(f"could not create the virtual cable: "
+                          f"{pulse.sink_name(channel)} / {pulse.source_name(channel)}")
+    return (f"created {pulse.sink_name(channel)} and "
+            f"{pulse.source_name(channel)}")
 
 
 def write_status(p: dict, **fields) -> None:
@@ -150,7 +162,7 @@ def _alive(pid: int | None) -> bool:
 
 
 def stop(p: dict | None = None, timeout: float = 10.0) -> bool:
-    """Stop a background daemon and the decoder it owns."""
+    """Stop a background daemon and every decoder it owns."""
     p = p or config.paths()
     pid = read_pid(p)
     stopped = False
@@ -168,30 +180,98 @@ def stop(p: dict | None = None, timeout: float = 10.0) -> bool:
             except OSError:
                 pass
         stopped = True
-    # a decoder left behind by a crashed daemon would hold the API port
+    # decoders left behind by a crashed daemon would hold the API ports
     subprocess.run(["pkill", "-x", "JS8Call"], capture_output=True)
     try:
         os.unlink(os.path.join(p["run"], "pid"))
     except OSError:
         pass
-    write_status(p, running=False, decoder_pid=None)
+    write_status(p, running=False, decoders=[])
     return stopped
+
+
+class Decoder:
+    """One JS8Call process, its API connection and its restart bookkeeping."""
+
+    def __init__(self, cfg: dict, paths: dict, channel: int):
+        self.cfg = cfg
+        self.p = paths
+        self.channel = channel
+        self.port = channel_port(cfg, channel)
+        self.proc: subprocess.Popen | None = None
+        self.api = api.Js8Api(cfg["api_host"], self.port)
+        self.restarts = 0
+        self.last_error = ""
+
+    def spawn(self) -> None:
+        binary = find_binary(self.cfg)
+        root = os.path.join(self.p["js8call"], f"ch{self.channel}")
+        env = dict(os.environ)
+        env["XDG_CONFIG_HOME"] = os.path.join(root, "config-home")
+        env["XDG_DATA_HOME"] = os.path.join(root, "data")
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        env.setdefault("QT_LOGGING_RULES", "")
+        os.makedirs(env["XDG_CONFIG_HOME"], exist_ok=True)
+        os.makedirs(env["XDG_DATA_HOME"], exist_ok=True)
+        write_ini(self.cfg, self.p, self.channel)
+        logpath = os.path.join(self.p["run"], f"js8call-{self.channel}.log")
+        log = open(logpath, "ab", buffering=0)
+        # A second instance needs its own application name, or Qt's single
+        # instance socket makes it sit in a modal "already running" box that
+        # never closes offscreen - the API port then never opens.
+        args = [binary] + (["-r", f"ch{self.channel}"] if self.channel > 1 else [])
+        self.proc = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=log, stderr=log, start_new_session=True)
+
+    def wait_api(self, timeout: float = 60.0) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.proc and self.proc.poll() is not None:
+                raise EngineError(
+                    f"decoder {self.channel} exited with {self.proc.returncode}; see "
+                    f"{os.path.join(self.p['run'], f'js8call-{self.channel}.log')}")
+            try:
+                self.api.connect(2.0)
+                return
+            except (OSError, api.ApiError):
+                time.sleep(0.5)
+        raise EngineError(f"decoder {self.channel} API did not come up within "
+                          f"{timeout:.0f}s on port {self.port}")
+
+    def alive(self) -> bool:
+        return bool(self.proc and self.proc.poll() is None)
+
+    def stop(self) -> None:
+        self.api.close()
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=8)
+            except (subprocess.TimeoutExpired, OSError):
+                try:
+                    self.proc.kill()
+                except OSError:
+                    pass
+
+    def describe(self) -> dict:
+        return {"channel": self.channel, "port": self.port,
+                "pid": self.proc.pid if self.proc else None,
+                "up": self.alive()}
 
 
 class Engine:
     def __init__(self, cfg: dict | None = None, paths: dict | None = None):
         self.cfg = cfg or config.load()
         self.p = paths or config.ensure_dirs()
-        self.proc: subprocess.Popen | None = None
-        self.api = api.Js8Api(self.cfg["api_host"], int(self.cfg["api_port"]))
         self.sink = records.Sink(self.p, self.cfg)
         self.deduper = records.Deduper(float(self.cfg.get("dedupe_grace_s", 2.0)))
         self.clock = clock.Tracker(int(self.cfg.get("clock_samples", 15)))
         self.start_time = time.time()
-        self.restarts = 0
         self.decodes = 0
         self.last_decode: float | None = None
         self.stop_flag = False
+        n = max(1, int(self.cfg.get("channels") or 1))
+        self.decoders = [Decoder(self.cfg, self.p, ch) for ch in range(1, n + 1)]
 
     # -- lifecycle ----------------------------------------------------------
     def _install_signals(self):
@@ -202,35 +282,6 @@ class Engine:
                 signal.signal(sig, _stop)
             except (ValueError, OSError):
                 pass
-
-    def spawn(self) -> None:
-        binary = find_binary(self.cfg)
-        env = dict(os.environ)
-        env["XDG_CONFIG_HOME"] = os.path.join(self.p["js8call"], "config-home")
-        env["XDG_DATA_HOME"] = os.path.join(self.p["js8call"], "data")
-        env["QT_QPA_PLATFORM"] = "offscreen"
-        env.setdefault("QT_LOGGING_RULES", "")
-        os.makedirs(env["XDG_CONFIG_HOME"], exist_ok=True)
-        os.makedirs(env["XDG_DATA_HOME"], exist_ok=True)
-        write_ini(self.cfg, self.p)
-        log = open(os.path.join(self.p["run"], "js8call.log"), "ab", buffering=0)
-        self.proc = subprocess.Popen([binary], env=env, stdin=subprocess.DEVNULL,
-                                     stdout=log, stderr=log, start_new_session=True)
-
-    def wait_api(self, timeout: float = 60.0) -> None:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.proc and self.proc.poll() is not None:
-                raise EngineError(
-                    f"JS8Call exited with {self.proc.returncode}; see "
-                    f"{os.path.join(self.p['run'], 'js8call.log')}")
-            try:
-                self.api.connect(2.0)
-                return
-            except (OSError, api.ApiError):
-                time.sleep(0.5)
-        raise EngineError("JS8Call API did not come up within "
-                          f"{timeout:.0f}s on {self.cfg['api_host']}:{self.cfg['api_port']}")
 
     def run(self) -> int:
         os.makedirs(self.p["run"], exist_ok=True)
@@ -245,36 +296,43 @@ class Engine:
         self._install_signals()
 
         self.state_file = os.path.join(self.p["run"], "pulse-modules.json")
-        note = ensure_cable(self.cfg, self.state_file)
-        if note:
-            print(note, flush=True)
-        if pulse.cable_status().get("monitor"):
-            print("monitoring on: the cable is also playing on your speakers", flush=True)
         try:
-            self.spawn()
-            self.wait_api()
-            ver = self.api.version()
-            self.api.set_freq(int(self.cfg["dial_hz"]), 1500)
-            print(f"decoder ready: JS8Call {ver or '?'} on "
-                  f"{self.cfg['api_host']}:{self.cfg['api_port']}", flush=True)
-            write_status(self.p, running=True, decoder_pid=self.proc.pid,
-                         version=ver, decodes=0, restarts=0, clock_offset=0.0)
-        except Exception:
+            for dec in self.decoders:
+                note = ensure_cable(self.cfg, self.state_file, dec.channel)
+                if note:
+                    print(note, flush=True)
+                dec.spawn()
+            for dec in self.decoders:
+                dec.wait_api()
+                ver = dec.api.version()
+                dec.api.set_freq(int(self.cfg["dial_hz"]), 1500)
+                print(f"decoder {dec.channel} ready: JS8Call {ver or '?'} on "
+                      f"{self.cfg['api_host']}:{dec.port}", flush=True)
+            if pulse.cable_status().get("monitor"):
+                print("monitoring on: the cable is also playing on your speakers",
+                      flush=True)
+            write_status(self.p, running=True, channels=len(self.decoders),
+                         decoders=[d.describe() for d in self.decoders],
+                         decodes=0, restarts=0, clock_offset=0.0)
+        except Exception as exc:
             self.shutdown()
+            write_status(self.p, running=False, error=str(exc))
             raise
 
         last_status = 0.0
         last_route = 0.0
         while not self.stop_flag:
-            for frame in self._poll():
-                self._handle(frame)
+            for dec in self.decoders:
+                for frame in self._poll(dec):
+                    self._handle(frame, dec.channel)
+            for rec in self.deduper.flush():
+                self._emit(rec)
+            for dec in self.decoders:
+                if not dec.alive():
+                    self._restart(dec)
             if time.time() - last_route > 3:
                 last_route = time.time()
                 self._route_watch()
-            for rec in self.deduper.flush():
-                self._emit(rec)
-            if self.proc.poll() is not None:
-                self._restart()
             now = time.time()
             if now - last_status > 5:
                 last_status = now
@@ -283,17 +341,20 @@ class Engine:
         self.shutdown()
         return 0
 
-    def _poll(self) -> list[dict]:
+    def _poll(self, dec: Decoder) -> list[dict]:
         try:
-            return self.api.read(0.4)
+            return dec.api.read(0.05)
         except api.ApiError:
-            self.api.close()
+            dec.api.close()
             return []
 
-    def _handle(self, frame: dict) -> None:
+    def _handle(self, frame: dict, channel: int) -> None:
         rec = records.parse_event(frame, self.clock.offset())
         if not rec:
             return
+        rec["channel"] = channel
+        if len(self.decoders) > 1:
+            rec["channels_total"] = len(self.decoders)
         for ready in self.deduper.add(rec):
             self._emit(ready)
 
@@ -337,25 +398,30 @@ class Engine:
             print(f"route: {app} started playing (stream {idx}) - "
                   "moved it to the cable", flush=True)
 
-    def _restart(self) -> None:
-        code = self.proc.returncode if self.proc else None
-        self.restarts += 1
-        self.api.close()
-        time.sleep(min(30, 2 * self.restarts))
-        self.spawn()
+    def _restart(self, dec: Decoder) -> None:
+        code = dec.proc.returncode if dec.proc else None
+        dec.restarts += 1
+        dec.stop()
+        time.sleep(min(30, 2 * dec.restarts))
         try:
-            self.wait_api()
-            self.api.set_freq(int(self.cfg["dial_hz"]), 1500)
-        except Exception as exc:                     # keep trying on the next tick
-            print(f"restart failed: {exc}", file=sys.stderr, flush=True)
+            dec.spawn()
+            dec.wait_api()
+            dec.api.set_freq(int(self.cfg["dial_hz"]), 1500)
+        except Exception as exc:             # keep trying on the next tick
+            dec.last_error = str(exc)
+            print(f"restart of decoder {dec.channel} failed: {exc}",
+                  file=sys.stderr, flush=True)
         with open(os.path.join(self.p["run"], "restarts.log"), "a") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} restart #{self.restarts} "
-                    f"after exit {code}\n")
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} decoder {dec.channel} "
+                    f"restart #{dec.restarts} after exit {code}\n")
 
     def _write_runtime_status(self) -> None:
         write_status(
-            self.p, running=True, decoder_pid=self.proc.pid if self.proc else None,
-            pid=os.getpid(), decodes=self.decodes, restarts=self.restarts,
+            self.p, running=True, pid=os.getpid(),
+            channels=len(self.decoders),
+            decoders=[d.describe() for d in self.decoders],
+            decodes=self.decodes,
+            restarts=sum(d.restarts for d in self.decoders),
             last_decode_s_ago=(round(time.time() - self.last_decode)
                                if self.last_decode else None),
             clock_offset=round(self.clock.offset(), 2),
@@ -364,15 +430,7 @@ class Engine:
         )
 
     def shutdown(self) -> None:
-        self.api.close()
+        for dec in self.decoders:
+            dec.stop()
         self.sink.close()
-        if self.proc and self.proc.poll() is None:
-            try:
-                self.proc.terminate()
-                self.proc.wait(timeout=8)
-            except (subprocess.TimeoutExpired, OSError):
-                try:
-                    self.proc.kill()
-                except OSError:
-                    pass
-        write_status(self.p, running=False, decoder_pid=None)
+        write_status(self.p, running=False, decoders=[])

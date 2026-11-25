@@ -89,6 +89,28 @@ Fields are fixed width so the text begins in the same column everywhere,
 missing values are printed as `?` rather than omitted, and heartbeats are
 filtered from the text view while every record survives in JSONL and SQLite.
 
+Several decoders
+----------------
+
+`channels: N` runs N JS8Call processes, one per cable channel. Two Qt details
+make or break this, and both fail silently:
+
+* **`-r chN` is required for instance N > 1.** Qt gives each application name a
+  single-instance socket; without a distinct name the second JS8Call sits in a
+  modal "already running" box. Offscreen there is nobody to click it, so the
+  process runs, writes a log line and never opens its API port — the daemon
+  then reports "API did not come up within 60 s".
+* **The settings file name follows the rig name.** With `-r ch2` JS8Call reads
+  `JS8Call - ch2.ini` (with spaces around the dash), not `JS8Call.ini`.
+  Writing the wrong file means the instance starts on defaults with no TCP
+  port at all.
+
+Each decoder gets its own `XDG_CONFIG_HOME`/`XDG_DATA_HOME` under
+`js8call/chN/`, its own port (`api_port + N - 1`), its own log in
+`run/js8call-N.log`, and its own restart counter. Records are tagged with
+`channel`; the rendered line only shows a `chN` field when more than one
+decoder is running, so single-channel logs keep their original shape.
+
 Measurements (Ubuntu 26.04, Core Ultra 9 185H, JS8Call 3.0.3)
 -------------------------------------------------------------
 
