@@ -205,6 +205,7 @@ Commands
 | `js8call-logger route-audio [--list\|--all\|--index N\|--copy\|--stop-copy\|--source NAME\|--list-sources\|--stop-source] [--to N]` | get audio onto the cable |
 | `js8call-logger start [-f]` | start in the background (`-f` stays in the foreground) |
 | `js8call-logger stop` | stop the logger and the decoder it owns |
+| `js8call-logger restart` | stop and start again, keeping the dial and settings |
 | `js8call-logger status [--json]` | service, decoders (one per channel), decodes, last decode, restarts, clock offset |
 | `js8call-logger tail [-n N] [-f]` | read the text log; `-f` follows it |
 | `js8call-logger tail --json` | JSONL view with every field |
@@ -234,7 +235,7 @@ port 2442, channel 2 on 2443, and so on. Each decoder has its own JS8Call
 config, its own log and its own waterfall. Records carry `channel`, and the
 text line gains a `ch2` tag so two bands can be told apart at a glance:
 
-    2026-11-25 08:31:57   7.078MHz +33dB 1500Hz ch2 N0CALL>@ALLCALL ...
+    2026-11-25 08:31:57  [  7.078MHz snr= +33 coh=100  ch2 N0CALL   ]  ...
 
 Route each receiver onto its own cable (`route-audio --index N --to 2`), and
 set the dial per channel with `tune --dial 14078000 --channel 2`. `cable down`
@@ -247,17 +248,24 @@ Logs
 `~/js8call-logger/logs/` (override with `JS8CALL_LOGGER_HOME`):
 
 * `js8call-logger-YYYY-MM-DD.txt` — one line per transmission, in fixed-width
-  fields so the text starts in the same column on every line:
+  fields so the text starts in the same column (67) on every line:
 
-      2026-11-24 22:37:41   7.078MHz +33dB 1500Hz N0CALL>@ALLCALL @ALLCALL CQ ...
+      2026-11-24 22:37:41  [  7.078MHz snr= +33 coh=100      N0CALL   ]  @ALLCALL CQ N0CALL: @ALLCALL CQ CQ CQ EM48
 
   | field | width | meaning |
   |---|---|---|
   | timestamp | 19 | when the transmission started, corrected by the clock offset |
-  | dial | 11 | frequency from config or `tune --dial`, `MHz` if unknown |
-  | SNR | 6 | `+33dB`, `-12dB`, or `?dB` when the decoder did not report one |
-  | offset | 6 | audio offset in Hz inside the passband |
-  | from>to | — | sender and recipient, `@GROUP` for group traffic |
+  | dial | 10 | frequency from config or `tune --dial`, `---` if unset |
+  | `snr=` | 8 | the decoder's signal report in dB, `--` when it reported none |
+  | `coh=` | 7 | 0–100, how much of the text looks like real traffic |
+  | channel | 4 | `ch2` when several decoders run, blank otherwise |
+  | callsign | 9, left | sender, truncated past nine characters |
+
+  `snr=` measures the **signal** and `coh=` the **text**: a strong carrier with
+  two stations overlapping scores high on SNR and low on coherence, which is
+  exactly the case worth noticing. Coherence counts tokens that look like a
+  callsign, grid locator, short number, JS8 keyword/group or ordinary English
+  word, so a mis-decode (`hq tz bv kw`) scores 0 and a clean CQ scores 100.
 
   Lines are capped at **150 characters including the prefix**. A transmission
   that does not fit continues on a line with the same timestamp and a `...`

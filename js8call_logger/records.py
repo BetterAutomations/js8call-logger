@@ -25,6 +25,8 @@ import re
 import time
 from datetime import datetime, timezone
 
+from .coherence import coherence
+
 HEARTBEAT_RE = re.compile(r"(^|\s)@?HB(\s|$)")
 CALL_RE = re.compile(r"^[A-Z0-9]{1,3}[0-9][A-Z]{1,4}$")
 
@@ -160,23 +162,30 @@ class Deduper:
 
 
 def _prefix(rec: dict) -> str:
+    """Fixed-width metadata block, morse-logger style.
+
+    Every field is padded to a constant width, so the decoded text starts in
+    the same column on every line and the log can be read with `cut -c68-`.
+    Unknown values are dashes rather than omitted, which is what keeps the
+    column stable.
+    """
     dial = rec.get("dial") or 0
-    dial_s = f"{dial / 1e6:7.3f}MHz" if dial else "       MHz"
+    dial_s = f"{dial / 1e6:7.3f}MHz" if dial else "    ---MHz"
     snr = rec.get("snr")
-    snr_s = f"{snr:+3d}dB" if isinstance(snr, int) else "  ?dB"
-    off = rec.get("offset")
-    off_s = f"{off:4d}Hz" if isinstance(off, int) else "  ?Hz"
-    who = f"{rec.get('src') or '?'}>{rec.get('dst') or '-'}"
-    # Only tag the line when more than one decoder is running, so single-channel
-    # logs keep the exact shape they had before channels existed.
+    snr_s = f"snr={snr:>+4d}" if isinstance(snr, int) else "snr=  --"
+    coh = rec.get("coherence")
+    coh_s = f"coh={coh:>3d}" if isinstance(coh, int) else "coh= --"
     ch_s = ""
     if (rec.get("channels_total") or 1) > 1 and rec.get("channel"):
-        ch_s = f" ch{rec['channel']}"
-    return f"{rec['ts']} {dial_s} {snr_s} {off_s}{ch_s} {who} "
+        ch_s = f"ch{rec['channel']}"
+    who = (rec.get("src") or "?")[:9]
+    return f"{rec['ts']}  [{dial_s} {snr_s} {coh_s} {ch_s:>4} {who:<9}]  "
 
 
 def render(rec: dict, width: int = 150) -> list[str]:
     """Render one record to one or more lines, each <= width characters."""
+    if not isinstance(rec.get("coherence"), int):
+        rec["coherence"] = coherence(rec.get("text") or "")
     head = _prefix(rec)
     text = " ".join((rec.get("text") or "").split())
     cont_mark = f"{rec['ts']}  ... "
@@ -225,7 +234,7 @@ class Sink:
 
     COLUMNS = ("ts", "kind", "src", "dst", "cmd", "snr", "offset", "dial",
                "speed", "tdrift", "grid", "heartbeat", "text", "utc_ms",
-               "channel")
+               "channel", "coherence")
 
     def __init__(self, paths: dict, cfg: dict):
         self.paths = paths
@@ -249,11 +258,12 @@ class Sink:
                 " ts TEXT, kind TEXT, src TEXT, dst TEXT, cmd TEXT,"
                 " snr INTEGER, offset INTEGER, dial INTEGER, speed INTEGER,"
                 " tdrift REAL, grid TEXT, heartbeat INTEGER, text TEXT,"
-                " utc_ms INTEGER, channel INTEGER)")
-            # logs written before multi-channel support have no channel column
+                " utc_ms INTEGER, channel INTEGER, coherence INTEGER)")
+            # logs written by older versions lack columns added since
             cols = {r[1] for r in self._db.execute("PRAGMA table_info(records)")}
-            if "channel" not in cols:
-                self._db.execute("ALTER TABLE records ADD COLUMN channel INTEGER")
+            for extra in ("channel", "coherence"):
+                if extra not in cols:
+                    self._db.execute(f"ALTER TABLE records ADD COLUMN {extra} INTEGER")
             self._db.execute("CREATE INDEX IF NOT EXISTS records_ts ON records(ts)")
             self._db.execute("CREATE INDEX IF NOT EXISTS records_src ON records(src)")
             self._db.commit()

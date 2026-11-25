@@ -119,6 +119,8 @@ def _rec_passes(rec: dict, args) -> bool:
 # -------------------------------------------------------------------- verbs
 def cmd_start(args):
     cfg = config.load()
+    quiet = bool(getattr(args, "quiet", False))
+    say = (lambda *a, **k: None) if quiet else print
     if args.foreground:
         eng = engine.Engine(cfg)
         try:
@@ -128,7 +130,7 @@ def cmd_start(args):
             return 1
     p = config.ensure_dirs()
     if engine.read_pid(p) and engine._alive(engine.read_pid(p)):
-        print("already running")
+        say("already running")
         return 0
     log = open(os.path.join(p["run"], "daemon.log"), "ab", buffering=0)
     subprocess.Popen([sys.executable, "-m", "js8call_logger.cli", "start",
@@ -138,12 +140,12 @@ def cmd_start(args):
         time.sleep(0.5)
         st = engine.read_status(p)
         if st.get("running"):
-            print("started")
+            say("started")
             return 0
         if st.get("error"):
-            print(f"error: {st['error']}")
+            say(f"error: {st['error']}")
             return 1
-    print("started (no status yet; see run/daemon.log)")
+    say("started (no status yet; see run/daemon.log)")
     return 0
 
 
@@ -152,6 +154,16 @@ def cmd_stop(_args):
     stopped = engine.stop(p)
     print("stopped" if stopped else "not running")
     return 0
+
+
+def cmd_restart(args):
+    """Stop and start again, keeping the dial and every other setting."""
+    p = config.ensure_dirs()
+    was_running = bool(engine.read_pid(p) and engine._alive(engine.read_pid(p)))
+    engine.stop(p)
+    rc = cmd_start(argparse.Namespace(foreground=False, quiet=True))
+    print("restarted" if was_running else "started")
+    return rc
 
 
 def cmd_status(args):
@@ -820,6 +832,9 @@ def build_parser():
 
     sp = sub.add_parser("stop", help="stop the logger")
     sp.set_defaults(func=cmd_stop)
+
+    sp = sub.add_parser("restart", help="stop and start again, keeping the dial")
+    sp.set_defaults(func=cmd_restart)
 
     sp = sub.add_parser("status", help="service status")
     sp.add_argument("--json", action="store_true")

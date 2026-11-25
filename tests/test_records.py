@@ -26,9 +26,30 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn("2026-11-25 02:38:00", lines[0])
         self.assertIn("14.078MHz", lines[0])
-        self.assertIn("+33dB", lines[0])
-        self.assertIn("N0CALL>@ALLCALL", lines[0])
+        self.assertIn("snr= +33", lines[0])
+        self.assertIn("coh=100", lines[0])
+        self.assertIn("N0CALL", lines[0])
         self.assertTrue(lines[0].endswith("CQ CQ CQ EM48"))
+
+    def test_text_starts_in_a_fixed_column(self):
+        a = records.render(rec())[0]
+        b = records.render(rec(dial=3578000, snr=-12, src="W1AW", text="TNX 73"))[0]
+        c = records.render(rec(dial=None, snr=None, text="GRID FN42"))[0]
+        cols = {ln.index(ln.rsplit("]", 1)[1].strip()) for ln in (a, b, c)}
+        self.assertEqual(len(cols), 1, cols)
+
+    def test_unknown_fields_are_dashes(self):
+        line = records.render(rec(dial=None, snr=None))[0]
+        self.assertIn("---MHz", line)
+        self.assertIn("snr=  --", line)
+
+    def test_coherence_lands_in_the_record(self):
+        r = rec(text="CQ CQ CQ EM48")
+        records.render(r)
+        self.assertEqual(r["coherence"], 100)
+        garbage = rec(text="hq tz bv kw qx zz")
+        records.render(garbage)
+        self.assertEqual(garbage["coherence"], 0)
 
     def test_every_line_under_cap(self):
         for width in (150, 120, 80):

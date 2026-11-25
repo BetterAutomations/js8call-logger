@@ -10,10 +10,11 @@ set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 prefix=/opt
+explicit_prefix=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --prefix) prefix=${2:?--prefix needs a directory}; shift 2 ;;
-        --prefix=*) prefix=${1#--prefix=}; shift ;;
+        --prefix) prefix=${2:?--prefix needs a directory}; explicit_prefix=1; shift 2 ;;
+        --prefix=*) prefix=${1#--prefix=}; explicit_prefix=1; shift ;;
         -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -25,13 +26,22 @@ if [ "$(id -u)" -ne 0 ]; then
     while [ ! -e "$probe" ]; do probe=$(dirname "$probe"); done
     [ -w "$probe" ] || sudo=sudo
 fi
-# The command must land somewhere the shell already looks. A system install
-# goes to /usr/local/bin (as morse-logger does); a user-local --prefix install
-# cannot write there, so it uses <prefix>/bin.
-if [ -z "$sudo" ]; then
-    bindir=${JS8CALL_LOGGER_BINDIR:-/usr/local/bin}
-else
+# Where the command goes. A default (/opt) install is system-wide and lands in
+# /usr/local/bin, as morse-logger does. An explicit --prefix is a user-local
+# install, so it goes in <prefix>/bin where no root is needed.
+if [ -n "${JS8CALL_LOGGER_BINDIR:-}" ]; then
+    bindir=$JS8CALL_LOGGER_BINDIR
+elif [ "$explicit_prefix" -eq 1 ]; then
     bindir=$prefix/bin
+else
+    bindir=/usr/local/bin
+fi
+
+# Ask for the password once, up front, the way morse-logger's installer does.
+# Everything after this - including the question about the data directory and
+# the long unpack - then runs without another prompt in the middle of it.
+if [ -n "$sudo" ]; then
+    $sudo -v || { echo "sudo is required to install into $prefix" >&2; exit 1; }
 fi
 
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }

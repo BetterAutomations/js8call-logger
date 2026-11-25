@@ -60,12 +60,15 @@ class ChannelTagTest(unittest.TestCase):
 
     def test_single_channel_line_has_no_tag(self):
         rec = dict(self.BASE, channel=1, channels_total=1)
-        self.assertNotIn(" ch", records.render(rec)[0].split("1500Hz")[1][:5])
+        line = records.render(rec)[0]
+        self.assertNotIn("ch1", line)
+        self.assertIn("N0CALL", line)
 
     def test_multi_channel_line_is_tagged(self):
         rec = dict(self.BASE, channel=2, channels_total=2)
         line = records.render(rec)[0]
-        self.assertIn("1500Hz ch2 N0CALL>@ALLCALL", line)
+        self.assertIn("ch2", line)
+        self.assertIn("N0CALL", line)
 
     def test_tag_keeps_the_width_cap(self):
         rec = dict(self.BASE, channel=2, channels_total=2, text="word " * 90)
