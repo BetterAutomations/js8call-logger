@@ -29,7 +29,6 @@ CLOCK
   phase, not a date). If that is ever needed, it is a GPS puck, not this.
 
 LOG
-- Abbreviation/glossary expansion in the style of morse-logger (token[word]).
   JS8 text is mostly plain English, so this is low value compared to CW.
 - Conversations split by group (@ALLCALL, @SITREP...) rather than only by
   correspondent.

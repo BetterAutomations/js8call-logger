@@ -23,6 +23,8 @@ import json
 import os
 import re
 import time
+
+from . import glossary
 from datetime import datetime, timezone
 
 from .coherence import coherence
@@ -226,37 +228,49 @@ def _prefix(rec: dict) -> str:
     return f"{rec['ts']}  [{dial_s} {snr_s} {coh_s} {ch_s:>4} {tone_s} {who:<9}]  "
 
 
-def render(rec: dict, width: int = 150) -> list[str]:
-    """Render one record to one or more lines, each <= width characters."""
+def render(rec: dict, width: int = 150, expand: str = "off",
+           expand_min_coh: int | None = None) -> list[str]:
+    """Render one record to one or more lines, each <= width characters.
+
+    `expand` is "off", "gloss" (meaning[TOKEN]) or "replace" (clean prose).
+    Expansion happens before wrapping and the wrapper moves *units*, so a
+    meaning never separates from the token it explains.
+    """
     if not isinstance(rec.get("coherence"), int):
         rec["coherence"] = coherence(rec.get("text") or "")
     head = _prefix(rec)
-    text = " ".join((rec.get("text") or "").split())
-    if rec.get("fragment") and text and not text.endswith("\u2026"):
-        text += " \u2026"                   # one frame of a longer message
-    cont_mark = f"{rec['ts']}  ... "
-    if not text:
+    raw = " ".join((rec.get("text") or "").split())
+    units, n_exp = glossary.translate_units(
+        raw, mode=expand, min_coherence=expand_min_coh,
+        coherence_fn=lambda t: rec["coherence"])
+    if expand != "off" and n_exp:
+        rec["text_xlated"] = " ".join(units)
+        rec["expansions"] = n_exp
+    if rec.get("fragment") and units and not units[-1].endswith("\u2026"):
+        units = units + ["\u2026"]          # one frame of a longer message
+    if not units:
         return [head.rstrip()[:width]]
+    cont_mark = f"{rec['ts']}  ... "
     avail = max(10, width - len(head))
     cont_avail = max(10, width - len(cont_mark))
     lines: list[str] = []
     prefix, cap, cur = head, avail, ""
-    for word in text.split(" "):
-        while len(word) > cap:
-            # a token longer than a whole line: truncate, carry the rest on
+    for unit in units:
+        while len(unit) > cap:
+            # a unit longer than a whole line: truncate, carry the rest on
             if cur:
                 lines.append(prefix + cur)
                 prefix, cap, cur = cont_mark, cont_avail, ""
-            chunk, word = word[: cap - 1], word[cap - 1:]
+            chunk, unit = unit[: cap - 1], unit[cap - 1:]
             lines.append(prefix + chunk + "\u2026")
             prefix, cap = cont_mark, cont_avail
         if not cur:
-            cur = word
-        elif len(cur) + 1 + len(word) <= cap:
-            cur += " " + word
+            cur = unit
+        elif len(cur) + 1 + len(unit) <= cap:
+            cur += " " + unit
         else:
             lines.append(prefix + cur)
-            prefix, cap, cur = cont_mark, cont_avail, word
+            prefix, cap, cur = cont_mark, cont_avail, unit
     if cur:
         lines.append(prefix + cur)
     return [ln[:width] for ln in lines]
@@ -280,7 +294,8 @@ class Sink:
 
     COLUMNS = ("ts", "kind", "src", "dst", "cmd", "snr", "offset", "dial",
                "speed", "tdrift", "grid", "heartbeat", "text", "utc_ms",
-               "channel", "coherence", "frame", "fragment")
+               "channel", "coherence", "frame", "fragment",
+               "text_xlated", "expansions")
 
     def __init__(self, paths: dict, cfg: dict):
         self.paths = paths
@@ -305,12 +320,15 @@ class Sink:
                 " snr INTEGER, offset INTEGER, dial INTEGER, speed INTEGER,"
                 " tdrift REAL, grid TEXT, heartbeat INTEGER, text TEXT,"
                 " utc_ms INTEGER, channel INTEGER, coherence INTEGER,"
-                " frame INTEGER, fragment INTEGER)")
+                " frame INTEGER, fragment INTEGER,"
+                " text_xlated TEXT, expansions INTEGER)")
             # logs written by older versions lack columns added since
             cols = {r[1] for r in self._db.execute("PRAGMA table_info(records)")}
-            for extra in ("channel", "coherence", "frame", "fragment"):
+            for extra, typ in (("channel", "INTEGER"), ("coherence", "INTEGER"),
+                               ("frame", "INTEGER"), ("fragment", "INTEGER"),
+                               ("text_xlated", "TEXT"), ("expansions", "INTEGER")):
                 if extra not in cols:
-                    self._db.execute(f"ALTER TABLE records ADD COLUMN {extra} INTEGER")
+                    self._db.execute(f"ALTER TABLE records ADD COLUMN {extra} {typ}")
             self._db.execute("CREATE INDEX IF NOT EXISTS records_ts ON records(ts)")
             self._db.execute("CREATE INDEX IF NOT EXISTS records_src ON records(src)")
             self._db.commit()
@@ -323,8 +341,13 @@ class Sink:
         if self._text_day != day or self._text_fh is None:
             if self._text_fh:
                 self._text_fh.close()
-            self._text_fh = open(self._text_path(day), "a", encoding="utf-8", buffering=1)
+            path = self._text_path(day)
+            new = not os.path.exists(path)
+            self._text_fh = open(path, "a", encoding="utf-8", buffering=1)
             self._text_day = day
+            if new and self.cfg.get("expand"):
+                # A month from now nobody remembers what meaning[TOKEN] meant.
+                self._text_fh.write(glossary.legend() + "\n")
         return self._text_fh
 
     def want_text(self, rec: dict) -> bool:

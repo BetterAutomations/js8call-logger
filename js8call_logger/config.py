@@ -40,6 +40,9 @@ DEFAULTS = {
     "line_chars": 150,                # hard cap, rendered line, prefix included
     "heartbeats_in_text": False,      # text file keeps @HB only when True
     "eot": "\u2662",                  # JS8Call's end-of-transmission character
+    "expand": True,                   # annotate shorthand in the text log
+    "expand_mode": "gloss",           # gloss = meaning[TOKEN], replace = prose
+    "expand_min_coherence": 45,       # do not gloss a garbled decode
     "snr_min_text": None,             # drop weaker lines from the text file
     "dedupe_grace_s": 2.0,            # window to collapse ACTIVITY/DIRECTED
     # clock

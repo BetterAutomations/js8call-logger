@@ -200,6 +200,7 @@ class Decoder:
         self.port = channel_port(cfg, channel)
         self.proc: subprocess.Popen | None = None
         self.api = api.Js8Api(cfg["api_host"], self.port)
+        self.last_connect = 0.0
         self.restarts = 0
         self.last_error = ""
 
@@ -363,10 +364,31 @@ class Engine:
                 print(f"could not restore source loop {src}: {exc}", file=sys.stderr)
 
     def _poll(self, dec: Decoder) -> list[dict]:
+        """Read frames, re-establishing the socket when it dies.
+
+        JS8Call drops idle TCP clients (and every decoder restart closes them),
+        and a logger that keeps a dead socket looks perfectly healthy while
+        logging nothing - decodes 0, "last decode never", decoder up. Retry on
+        a short timer rather than in a busy loop.
+        """
+        if not dec.api.connected:
+            now = time.time()
+            if now - dec.last_connect < 2.0:
+                return []
+            dec.last_connect = now
+            try:
+                dec.api.connect(2.0)
+                print(f"api connected: {self.cfg['api_host']}:{dec.port}", flush=True)
+            except (OSError, api.ApiError) as exc:
+                print(f"api connect failed on port {dec.port}: {exc} - retrying",
+                      flush=True)
+                return []
         try:
             return dec.api.read(0.05)
-        except api.ApiError:
+        except api.ApiError as exc:
             dec.api.close()
+            print(f"api disconnected on port {dec.port}: {exc} - reconnecting",
+                  flush=True)
             return []
 
     def _handle(self, frame: dict, channel: int) -> None:
@@ -388,7 +410,13 @@ class Engine:
         # would report twice the evidence we actually have.
         if isinstance(rec.get("tdrift"), (int, float)):
             self.clock.add(float(rec["tdrift"]))
-        self.sink.write(rec, records.render(rec, int(self.cfg.get("line_chars", 150))))
+        mode = str(self.cfg.get("expand_mode") or "gloss")
+        if not self.cfg.get("expand", True):
+            mode = "off"
+        lines = records.render(rec, int(self.cfg.get("line_chars", 150)),
+                               expand=mode,
+                               expand_min_coh=self.cfg.get("expand_min_coherence"))
+        self.sink.write(rec, lines)
 
     def _route_watch(self) -> None:
         """Keep remembered apps on the cable across reloads.

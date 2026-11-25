@@ -314,6 +314,38 @@ One transmission arrives twice from JS8Call, as `RX.ACTIVITY` and as
 `RX.DIRECTED`, both carrying the same UTC millisecond. The logger keeps the
 richer directed record and drops the twin.
 
+Shorthand
+---------
+
+JS8 operators mostly type plain English, so the glossary is deliberately
+short: JS8's own keywords (`@ALLCALL`, `HEARTBEAT`, `CQ`, `MSG`, `ACK`, `SNR`,
+`GRID`, `DE`), the Q-signals, and the classic abbreviations that still turn up
+(`73`, `TNX`, `PSE`, `FER`, `GL`, `QSL`, `QTH`, `BURO`...). Ordinary short
+words — NO, TO, IN, ID, ON — are left alone, as are callsigns and group names
+other than `@ALLCALL` and `@HB`.
+
+Expansion is annotated, never overwritten: the readable text first, the token
+that was actually sent in brackets.
+
+    @ALLCALL CQ N0CALL: @ALLCALL CQ CQ CQ EM48 ♢
+    all stations[@ALLCALL] calling all stations[CQ] N0CALL: ...
+
+That way a wrong expansion is visible right next to the token it came from, and
+the raw decode is what stays in the JSONL (`text`) with the annotated version
+beside it (`text_xlated`). A token repeated in a run is expanded once, so
+`CQ CQ CQ` does not become three glosses. Lines below the coherence threshold
+(45 by default) are never annotated — glossing a garbled decode only makes it
+harder to read.
+
+In config.json:
+
+    "expand": true,                # annotate the text log
+    "expand_mode": "gloss",        # or "replace" for clean prose, no brackets
+    "expand_min_coherence": 45
+
+Each new daily file starts with a one-line legend, because `meaning[TOKEN]` is
+not self-evident a month later.
+
 Clock
 -----
 
