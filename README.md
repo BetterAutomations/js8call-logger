@@ -176,6 +176,7 @@ What is in the repository
     js8call-logger       launcher, for running from a checkout
     tests/               unit tests and the replay fixture
     docs/DESIGN.md       decoder facts, API notes, why the pipeline looks like this
+    docs/HARDWARE-TESTING.md  the checklist for when a radio/dongle arrives
     FIXME.txt            features knowingly not built yet
     install.sh           offline installer (prompts for the data directory)
     refresh-bundle.sh    copies an AppImage into bundle/ and checksums it

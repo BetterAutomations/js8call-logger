@@ -51,4 +51,9 @@ PACKAGING
   than glibc 2.38. Not needed for the target machine (Lubuntu 26.10).
 - Flatpak, as morse-logger eventually wants.
 
+REAL HARDWARE
+- The whole checklist lives in docs/HARDWARE-TESTING.md. Nothing in it has
+  been run yet: every path so far was proven with virtual sinks, stub
+  executables (rtl_fm, pacat) or a known-good recording.
+
 == Christopher's notes==
