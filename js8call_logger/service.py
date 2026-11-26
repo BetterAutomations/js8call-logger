@@ -15,10 +15,20 @@ def unit_path() -> str:
     return os.path.join(unit_dir(), NAME)
 
 
+def _quote(path: str) -> str:
+    """systemd splits ExecStart on spaces; quote when it must."""
+    if " " not in path and "\t" not in path:
+        return path
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def unit_text(exec_path: str, home: str | None = None,
               doc: str | None = None) -> str:
-    env = f"Environment=JS8CALL_LOGGER_HOME={home}\n" if home else ""
-    docs = f"Documentation=file:{doc}\n" if doc else ""
+    env = f"Environment=\"JS8CALL_LOGGER_HOME={home}\"\n" if home and " " in home else (
+        f"Environment=JS8CALL_LOGGER_HOME={home}\n" if home else "")
+    # systemd wants a URI here and rejects one containing spaces
+    docs = f"Documentation=file:{doc}\n" if doc and " " not in doc else ""
+    exec_path = _quote(exec_path)
     return f"""[Unit]
 Description=JS8Call logger
 {docs}After=pipewire.service wireplumber.service network-online.target

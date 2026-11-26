@@ -51,7 +51,15 @@ PACKAGING
   than glibc 2.38. Not needed for the target machine (Lubuntu 26.10).
 - Flatpak, as morse-logger eventually wants.
 
+MULTI-CHANNEL
+- Two channels are proven end to end by tools/two-channel-check.py: two cables,
+  the same known frame played into both, one record per channel in the log.
+  Not proven: two *different* signals at once, which needs a second receiver.
+
 TEST FIXTURES
+- A decodable recording now exists: tests/fixtures/live-2026-11-26T1622Z-30s.wav,
+  30 s captured off the live cable while the log was filling, chosen from the
+  records themselves, and verified by replay (93 % of expected text).
 - The 25 Nov WebSDR capture (7078 kHz, 69 min, 8 kHz mono) turned out to hold
   no decodable JS8 in its first 30 s: verified with a dedicated decoder on an
   otherwise silent cable, zero decodes. It is still useful as the busy-band

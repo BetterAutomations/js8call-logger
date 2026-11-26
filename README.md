@@ -166,6 +166,11 @@ The bundle is one file: `bundle/JS8Call.AppImage` (~59 MB, 3.0.3, checksum in
 
     ./refresh-bundle.sh /path/to/JS8Call-v3.0.3-x86_64.AppImage
 
+`tests/fixtures/live-2026-11-26T1622Z-30s.wav` is 30 s of the live feed,
+captured while the log was filling and verified by replay (93 % of the expected
+text: `js8call-logger selftest --recording tests/fixtures/live-2026-11-26T1622Z-30s.wav
+--expect "KD2UWR HEARTBEAT SNR"`).
+
 `tests/fixtures/n0call-cq.raw` is a recorded JS8 frame that `selftest` plays
 into the cable, so a fresh install can prove itself with no radio attached.
 `tests/fixtures/websdr-2026-11-25T1453Z-30s.wav` is 30 s of real off-air audio
@@ -289,6 +294,15 @@ Commands
 | `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 | `js8call-logger service [install\|remove\|status]` | systemd user unit so it starts at boot |
+
+Two channels are proven by a script, not a unit test, since it needs a running
+decoder on each cable:
+
+    python3 tools/two-channel-check.py
+
+It brings up two cables, plays the known frame into both decoders at once,
+checks that one record lands on ch1 and one on ch2, then puts the install back
+the way it found it.
 
 ## Starting at boot
 

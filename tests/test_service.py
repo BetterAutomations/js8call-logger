@@ -75,3 +75,17 @@ class InstallTest(unittest.TestCase):
         r = mock.Mock(stdout="Linger=no\n", returncode=0)
         with mock.patch("subprocess.run", return_value=r):
             self.assertFalse(service.linger_enabled())
+
+
+    def test_space_in_launcher_is_quoted(self):
+        txt = service.unit_text("/cygdrive/c/Amateur radio/app/js8call-logger")
+        self.assertIn(
+            'ExecStart="/cygdrive/c/Amateur radio/app/js8call-logger" '
+            'start --foreground', txt)
+
+    def test_documentation_skipped_when_path_has_space(self):
+        txt = service.unit_text("/x/js8call-logger",
+                                doc="/cygdrive/c/Amateur radio/README.md")
+        self.assertNotIn("Documentation=", txt)
+        txt = service.unit_text("/x/js8call-logger", doc="/opt/app/README.md")
+        self.assertIn("Documentation=file:/opt/app/README.md", txt)
