@@ -20,6 +20,7 @@ import itertools
 import json
 import select
 import socket
+import threading
 
 
 class ApiError(Exception):
@@ -33,23 +34,28 @@ class Js8Api:
         self.sock: socket.socket | None = None
         self._buf = b""
         self._ids = itertools.count(1)
+        # the daemon's main loop reads while the watchdog may close and
+        # reconnect: every socket touch happens under this lock
+        self._lock = threading.RLock()
 
     # -- connection ---------------------------------------------------------
     def connect(self, timeout: float = 5.0) -> None:
-        self.close()
-        s = socket.create_connection((self.host, self.port), timeout)
-        s.setblocking(False)
-        self.sock = s
-        self._buf = b""
+        with self._lock:
+            self.close()
+            s = socket.create_connection((self.host, self.port), timeout)
+            s.setblocking(False)
+            self.sock = s
+            self._buf = b""
 
     def close(self) -> None:
-        if self.sock:
-            try:
-                self.sock.close()
-            except OSError:
-                pass
-        self.sock = None
-        self._buf = b""
+        with self._lock:
+            if self.sock:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+            self.sock = None
+            self._buf = b""
 
     @property
     def connected(self) -> bool:
@@ -57,36 +63,46 @@ class Js8Api:
 
     # -- io -----------------------------------------------------------------
     def send(self, typ: str, value: str = "", params: dict | None = None) -> int:
-        if not self.sock:
-            raise ApiError("not connected")
-        mid = next(self._ids)
-        frame = {"params": dict(params or {}), "type": typ, "value": value}
-        frame["params"].setdefault("_ID", mid)
-        data = (json.dumps(frame) + "\n").encode()
-        try:
-            self.sock.setblocking(True)
-            self.sock.sendall(data)
-        except OSError as exc:
-            self.close()
-            raise ApiError(f"send failed: {exc}") from exc
-        finally:
-            if self.sock:
-                self.sock.setblocking(False)
-        return mid
+        with self._lock:
+            sock = self.sock
+            if sock is None:
+                raise ApiError("not connected")
+            mid = next(self._ids)
+            frame = {"params": dict(params or {}), "type": typ, "value": value}
+            frame["params"].setdefault("_ID", mid)
+            data = (json.dumps(frame) + "\n").encode()
+            try:
+                sock.setblocking(True)
+                sock.sendall(data)
+            except OSError as exc:
+                self.close()
+                raise ApiError(f"send failed: {exc}") from exc
+            finally:
+                try:
+                    sock.setblocking(False)
+                except OSError:
+                    pass
+            return mid
 
     def read(self, timeout: float = 0.5) -> list[dict]:
         """Return every complete frame available within `timeout`."""
-        if not self.sock:
+        with self._lock:
+            return self._read(timeout)
+
+    def _read(self, timeout: float) -> list[dict]:
+        # a local snapshot: another thread may close and reconnect underneath
+        sock = self.sock
+        if sock is None:
             raise ApiError("not connected")
         out: list[dict] = []
         try:
-            ready, _, _ = select.select([self.sock], [], [], timeout)
+            ready, _, _ = select.select([sock], [], [], timeout)
         except (OSError, ValueError):
             self.close()
             raise ApiError("socket closed")
         if ready:
             try:
-                chunk = self.sock.recv(65536)
+                chunk = sock.recv(65536)
             except BlockingIOError:
                 return out
             except OSError as exc:
