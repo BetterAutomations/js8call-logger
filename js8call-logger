@@ -1,4 +1,8 @@
 #!/bin/sh
-# Run js8call-logger straight from the checkout, no install needed.
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m js8call_logger.cli "$@"
+# Run js8call-logger from this directory. Works through a symlink: the
+# installer links this file into a bin directory, so $0 is not the real one.
+# -P keeps the current directory off sys.path, or a checkout in $PWD shadows
+# the installed package.
+self=$(readlink -f -- "$0" 2>/dev/null || echo "$0")
+here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -P -m js8call_logger.cli "$@"

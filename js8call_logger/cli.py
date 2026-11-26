@@ -18,7 +18,7 @@ import time
 
 from . import __version__
 from . import (api, burst, clock, config, engine, migrate, pulse, records,
-               retention, sdr, tune)
+               retention, sdr, service, tune)
 
 APP = config.APP
 _STOP = {"now": False}
@@ -656,6 +656,52 @@ def cmd_dial(args):
         applied = ("running, applied now" if len(done) == len(ports)
                    else "running, but the API did not answer on every decoder")
     print(f"dial set to {hz / 1e6:g} MHz - {applied}")
+    return 0
+
+
+def _launcher_path() -> str:
+    """The launcher that owns this package, not the module argv[0]."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cand = os.path.join(here, "js8call-logger")
+    if os.access(cand, os.X_OK):
+        return cand
+    found = shutil.which("js8call-logger")
+    return os.path.realpath(found) if found else cand
+
+
+def cmd_service(args):
+    """Install a systemd user unit so the logger comes back after a reboot."""
+    if not service.available():
+        print("no reachable user systemd on this machine - keep starting it "
+              "by hand, or use a cron @reboot line")
+        return 2
+    if args.action == "status":
+        ok, out = service.status()
+        print(out or f"{service.NAME}: no output")
+        return 0 if ok else 1
+    if args.action == "remove":
+        ok, out = service.remove()
+        print(("ok      " if ok else "failed  ") + out)
+        return 0 if ok else 1
+    p = config.ensure_dirs()
+    pid = engine.read_pid(p)
+    if pid and engine._alive(pid):
+        print("stopping the manually started daemon first")
+        engine.stop(p)
+    exec_path = _launcher_path()
+    home = os.environ.get("JS8CALL_LOGGER_HOME") or None
+    doc = os.path.join(os.path.dirname(exec_path), "README.md")
+    ok, out = service.install(exec_path, home, doc, start=not args.no_start)
+    if not ok:
+        print(f"failed  {out}")
+        return 1
+    print(f"installed  {service.unit_path()}")
+    print(f"launcher   {exec_path}")
+    print(f"{'started' if not args.no_start else 'enabled'}    {service.NAME}")
+    if not service.linger_enabled():
+        print("note       a user unit stops when you log out; to keep logging "
+              "without a session: sudo loginctl enable-linger "
+              + (os.environ.get("USER") or "$USER"))
     return 0
 
 
@@ -1435,6 +1481,12 @@ def build_parser():
     sp.add_argument("--no-auto", action="store_true",
                     help="stop reminding about decode-depth re-sweeps")
     sp.set_defaults(func=cmd_tune)
+
+    sp = sub.add_parser("service", help="run the logger as a systemd user service")
+    sp.add_argument("action", nargs="?", default="install",
+                    choices=["install", "remove", "status"])
+    sp.add_argument("--no-start", action="store_true")
+    sp.set_defaults(func=cmd_service)
 
     sp = sub.add_parser("migrate",
                         help="fold legacy GROUP*.txt files into conversations/groups/")

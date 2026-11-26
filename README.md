@@ -288,9 +288,27 @@ Commands
 | `js8call-logger input [NAME] [--list] [--clear]` | choose the capture device the decoder listens to (a sound card, or the cable) |
 | `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
+| `js8call-logger service [install\|remove\|status]` | systemd user unit so it starts at boot |
 
-Automatic adjustment
---------------------
+## Starting at boot
+
+    js8call-logger service install     # systemd --user unit, enabled and started
+    js8call-logger service status      # systemctl --user status --no-pager
+    js8call-logger service remove      # disable and delete it
+
+The unit is `~/.config/systemd/user/js8call-logger.service`, run as
+`<launcher> start --foreground` with `Restart=on-failure`, so a crashed daemon
+returns by itself. `install.sh --service` does the same during installation.
+
+A *user* unit only runs while that user has a session. For a laptop that logs
+unattended after boot, allow lingering once:
+
+    sudo loginctl enable-linger $USER
+
+`service` refuses with a message when there is no user systemd to talk to
+(a container, a CI runner) rather than writing a unit nothing will read.
+
+## Automatic adjustment
 
 Some things are repaired without being asked, because the failure is silent
 and the fix is safe. These run in the daemon's own threads and re-read

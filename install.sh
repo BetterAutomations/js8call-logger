@@ -16,9 +16,11 @@ while [ $# -gt 0 ]; do
         --prefix) prefix=${2:?--prefix needs a directory}; explicit_prefix=1; shift 2 ;;
         --prefix=*) prefix=${1#--prefix=}; explicit_prefix=1; shift ;;
         -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        --service) service_flag=1; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+service_flag=${service_flag:-0}
 dest=$prefix/js8call-logger
 sudo=
 if [ "$(id -u)" -ne 0 ]; then
@@ -127,3 +129,8 @@ case ":$PATH:" in
     *) echo "note: $bindir is not on your PATH; add it or call $bindir/js8call-logger" ;;
 esac
 echo "Next: js8call-logger doctor && js8call-logger start"
+if [ "$service_flag" -eq 1 ]; then
+    "$bindir/js8call-logger" service install
+else
+    echo "Tip: $bindir/js8call-logger service install   # start at boot"
+fi
