@@ -55,6 +55,7 @@ def main() -> int:
     from js8call_logger import config
     cfg = config.load()
     before = int(cfg.get("channels") or 1)
+    was_monitor = bool(cfg.get("monitor", True))
     was_service = "active" in subprocess.run(
         ["systemctl", "--user", "is-active", "js8call-logger.service"],
         capture_output=True, text=True).stdout
@@ -102,7 +103,8 @@ def main() -> int:
         run("stop")
         time.sleep(1)
         run("cable", "down")
-        run("cable", "up", "--channels", str(before))
+        run("cable", "up", "--channels", str(before),
+        *([] if was_monitor else ["--no-monitor"]))
         if was_service:
             run("service", "install")
         else:

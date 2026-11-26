@@ -70,6 +70,11 @@ still decode. Turn all three off in the WebSDR or the receiver.
 
 ### Signs of trouble
 
+**Normal sounds echo or sound doubled.** A loopback is playing a cable's
+monitor into your speakers while the app is already audible there. Check with
+`pactl list modules | grep loopback`; `doctor` names it and `cable up
+--no-monitor` removes it.
+
 | symptom | meaning | fix |
 |---|---|---|
 | `status` running, `decodes 0`, audio present | clock off, wrong mode, or pure noise | `timedatectl`; check USB and passband |

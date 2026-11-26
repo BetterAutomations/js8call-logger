@@ -375,26 +375,40 @@ def _clock_bootstrap(args) -> int:
     return 0
 
 
+def _want_monitor(args, cfg) -> bool:
+    """Tri-state: --monitor, --no-monitor, or whatever the config says."""
+    if getattr(args, "no_monitor", False):
+        return False
+    if getattr(args, "monitor", False):
+        return True
+    return bool(cfg.get("monitor", True))
+
+
 def cmd_cable(args):
     """Manage the virtual audio cable: up, down, status."""
     p = config.ensure_dirs()
     sf = os.path.join(p["run"], "pulse-modules.json")
     cfg = config.load()
     if args.action == "up":
-        if not args.no_monitor and pulse._tap_active():
+        want = _want_monitor(args, cfg)
+        if want and pulse._tap_active():
             print("the copy loop is on (your speakers -> the cable), so monitoring")
             print("would feed the cable back into your speakers.")
             print("pick one: 'js8call-logger route-audio --stop-copy' to remove it, "
                   "or 'js8call-logger cable up --no-monitor'.")
             return 2
-        removed = pulse.stop_monitor(sf) if args.no_monitor else []
+        removed = [] if want else pulse.stop_monitor(sf)
         channels = max(1, int(getattr(args, "channels", 1) or 1))
         done = {}
         for ch in range(1, channels + 1):
-            done = pulse.ensure_cable(state_file=sf, monitor=(not args.no_monitor and ch == 1),
+            done = pulse.ensure_cable(state_file=sf, monitor=(want and ch == 1),
                                       rate=int(cfg.get("cable_rate") or 48000), channel=ch)
             print(f"virtual cable {ch}: sink '{pulse.sink_name(ch)}' -> "
                   f"source '{pulse.source_name(ch)}'")
+        if bool(cfg.get("monitor", True)) != want:
+            cfg["monitor"] = want
+            config.save(cfg)
+            print(f"config: monitor={str(want).lower()}")
         if channels != int(cfg.get("channels") or 1):
             cfg["channels"] = channels
             config.save(cfg)
@@ -1079,6 +1093,16 @@ def cmd_doctor(args):
         elsewhere = [r for r in all_rows
                      if r.get("sink_name") != pulse.sink_name(1)
                      and not pulse.is_own_loopback(r)]
+        if not cfg.get("monitor"):
+            stray = pulse.monitor_loops_to_default()
+            if stray:
+                warn("a cable monitor loopback is playing to your speakers",
+                     "that is the echo - remove it: " + APP +
+                     " cable up --no-monitor")
+            else:
+                print("  [ok] no monitor loopback into your speakers")
+        else:
+            print("  [--] monitoring on - the cable also plays to your speakers")
         if not rows:
             note("nothing is playing into the cable yet")
             # Audio can be playing and still be invisible here: it is going to
@@ -1442,6 +1466,8 @@ def build_parser():
 
     sp = sub.add_parser("cable", help="manage the virtual audio cable")
     sp.add_argument("action", choices=["up", "down", "status"])
+    sp.add_argument("--monitor", action="store_true",
+                    help="play the cable to your speakers (the saved default)")
     sp.add_argument("--no-monitor", action="store_true",
                     help="do not play the cable on your speakers")
     sp.add_argument("--channels", type=int, default=1)

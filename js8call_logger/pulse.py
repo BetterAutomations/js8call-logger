@@ -495,3 +495,28 @@ def cable_status() -> dict:
             "channels": cable_channels(),
             "sinks": [r[1] for r in sinks() if len(r) > 1],
             "sources": [r[1] for r in sources() if len(r) > 1]}
+
+
+def monitor_loops_to_default() -> list[int]:
+    """Loopbacks playing a cable monitor into the default sink.
+
+    The echo trap: audio reaches the speakers twice, ~100 ms apart.
+    """
+    default = default_sink_name()
+    if not default:
+        return []
+    names = {sink_name(ch) + ".monitor" for ch in (cable_channels() or [1])}
+    out = []
+
+    for mid, block in _module_blocks():
+        if "module-loopback" not in block:
+            continue
+        src = re.search(r"source=(\S+)", block)
+        snk = re.search(r"sink=(\S+)", block)
+        if not src or not snk:
+            continue
+        if src.group(1) not in names:
+            continue
+        if snk.group(1) == default:
+            out.append(mid)
+    return out
