@@ -227,7 +227,31 @@ Commands
 | `js8call-logger tune [--dial HZ] [--channel N]` | lower-level: dial and channel settings straight to one decoder |
 | `js8call-logger prune [--days N] [--dry-run] [--delete]` | archive (or delete) logs older than N days |
 | `js8call-logger migrate [--dry-run]` | fold legacy flat `GROUP*.txt` conversation files into `conversations/groups/` |
+| `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the cable's input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
+
+Input level
+-----------
+
+JS8 wants peaks between -20 and -10 dBFS. `doctor` warns when the cable is
+clipping or far too quiet, and `level` measures and fixes it:
+
+    js8call-logger level                 # measure and report, change nothing
+    js8call-logger level --set           # trim the source volume toward the target
+    js8call-logger level --set --dry-run # say what would change
+
+It reads the cable's peak level and the source's current volume, then works out
+the percentage change in dB, capped at 6 dB per call (`level_max_step_db`) so a
+noisy measurement cannot overshoot. It never amplifies past 100% and never
+touches digital silence, where raising the volume would only amplify noise.
+The target is `level_target_db` in config.json (-14 dBFS by default).
+
+The trim is applied to the cable's *source* volume, which is the last stage
+before the decoder, so it is the right place to correct a hot feed and the
+wrong place to fix a quiet one: if the source application is already at 100%,
+`level` says so and you have to raise the volume there. Set `"level_auto": true`
+to have the daemon re-check every 20 seconds; it is off by default because
+changing a volume the user set is intrusive.
 
 Decode depth
 ------------

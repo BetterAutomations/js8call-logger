@@ -46,6 +46,10 @@ DEFAULTS = {
     "snr_min_text": None,             # drop weaker lines from the text file
     "dedupe_grace_s": 2.0,            # window to collapse ACTIVITY/DIRECTED
     "retention_days": 0,              # 0 = keep everything; see `prune`
+    # input level
+    "level_target_db": -14.0,         # aim here; JS8 wants -20..-10 dBFS
+    "level_auto": False,              # daemon trims the source volume as it drifts
+    "level_max_step_db": 6.0,         # per adjustment, so repeated calls converge
     # Refinement passes; false sets JS8_DISABLE_<NAME> for the decoder.
     "decode_env": {"deep_search": True, "ldpc_rescue": True,
                    "coherent_data": True, "redemod": True,

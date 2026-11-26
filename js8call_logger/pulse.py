@@ -438,6 +438,57 @@ def route_new_streams(target: str = SINK, apps=(), known=()):
     return moved, known
 
 
+def source_volume(name: str = SOURCE) -> float | None:
+    """Current source volume as a percentage, or None if it cannot be read."""
+    p = _run(["pactl", "get-source-volume", name], check=False)
+    if p.returncode != 0:
+        return None
+    m = re.search(r"front-left: \d+ / (\d+)%", p.stdout.decode(errors="replace"))
+    if not m:
+        m = re.search(r"/ +(\d+)%", p.stdout.decode(errors="replace"))
+    return float(m.group(1)) if m else None
+
+
+def set_source_volume(name: str, percent: float) -> bool:
+    """Set a source's volume; clamped to 0-100% so we never amplify past unity."""
+    pct = max(0, min(100, int(round(percent))))
+    p = _run(["pactl", "set-source-volume", name, f"{pct}%"], check=False)
+    return p.returncode == 0
+
+
+def trim_volume(measured_db: float, current_percent: float,
+                target_db: float = -14.0, max_step_db: float = 6.0,
+                deadband_db: float = 2.0) -> dict:
+    """Work out a new volume percentage to move a measured level toward target.
+
+    Pure arithmetic, so it can be tested without a sound server. The measured
+    level already includes the current volume, so the correction is a plain
+    ratio in dB, capped at max_step_db so repeated calls converge instead of
+    overshooting on a noisy measurement.
+    """
+    if measured_db is None or current_percent is None:
+        return {"action": "none", "percent": None, "delta_db": 0.0,
+                "reason": "level or volume unknown"}
+    if measured_db <= -80.0:
+        return {"action": "none", "percent": current_percent, "delta_db": 0.0,
+                "reason": "digital silence - raising the volume would just "
+                          "amplify noise"}
+    delta = target_db - measured_db
+    if abs(delta) <= deadband_db:
+        return {"action": "none", "percent": current_percent, "delta_db": round(delta, 1),
+                "reason": "within tolerance"}
+    step = max(-max_step_db, min(max_step_db, delta))
+    percent = current_percent * (10 ** (step / 20.0))
+    clamped = max(0.0, min(100.0, percent))
+    if abs(clamped - current_percent) < 1.0:
+        return {"action": "none", "percent": current_percent, "delta_db": round(delta, 1),
+                "reason": ("already at 100% - raise the volume in the source "
+                           "application" if step > 0 else "already at 0%")}
+    return {"action": "raise" if step > 0 else "lower",
+            "percent": round(clamped, 1), "delta_db": round(delta, 1),
+            "reason": "outside tolerance"}
+
+
 def cable_status() -> dict:
     return {"sink": sink_exists(), "source": source_exists(),
             "monitor": _monitor_active(), "tap": _tap_active(),

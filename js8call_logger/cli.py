@@ -584,6 +584,52 @@ def cmd_dial(args):
     return 0
 
 
+def cmd_level(args):
+    """Measure the cable's input level and trim the source volume toward target."""
+    cfg = config.load()
+    target = args.target if args.target is not None else float(
+        cfg.get("level_target_db", -14.0))
+    step_db = float(cfg.get("level_max_step_db", 6.0))
+    src = pulse.source_name(args.channel)
+    if not pulse.source_exists(src):
+        print(f"no cable source {src} - run 'js8call-logger cable up' first")
+        return 2
+
+    sample = pulse.capture_samples(args.seconds, rate=8000, source=src)
+    if not sample:
+        print(f"could not capture audio from {src}")
+        return 2
+    db = pulse.peak_dbfs(sample)
+    vol = pulse.source_volume(src)
+    verdict = ("too quiet" if db < -20 else "clipping" if db > -10
+               else "ok")
+    print(f"level: {db} dBFS  volume {vol:.0f}%  target {target:g} dBFS  [{verdict}]"
+          if vol is not None else
+          f"level: {db} dBFS  volume unknown  target {target:g} dBFS  [{verdict}]")
+    if db <= -80:
+        print("  digital silence - the streams are open but delivering zeros; "
+              "fix the source, do not raise the volume")
+        return 0
+
+    plan = pulse.trim_volume(db, vol, target_db=target, max_step_db=step_db)
+    if plan["action"] == "none":
+        print(f"  {plan['reason']}")
+        return 0
+    print(f"  {plan['action']} by {abs(plan['delta_db']):.1f} dB -> "
+          f"{plan['percent']:.0f}%")
+    if args.dry_run:
+        print("  dry run - nothing was changed")
+        return 0
+    if not args.set:
+        print(f"  nothing changed - add --set to apply it")
+        return 0
+    if not pulse.set_source_volume(src, plan["percent"]):
+        print(f"  could not set the volume on {src}")
+        return 2
+    print(f"  volume set to {plan['percent']:.0f}% - re-run 'level' to confirm")
+    return 0
+
+
 def cmd_tune_decoder(args):
     """Measure decodes against CPU for each decode-depth profile."""
     p = config.ensure_dirs()
@@ -822,13 +868,17 @@ def cmd_doctor(_args):
                      "(a tab reload is not enough)")
             else:
                 db = pulse.peak_dbfs(sample)
+                vol = pulse.source_volume(pulse.source_name(1))
+                at = f" at volume {vol:.0f}%" if vol is not None else ""
                 if db < -30:
-                    warn(f"cable level {db} dBFS", "far too quiet to decode; raise the "
-                         "volume (aim for -20 to -10 dBFS)")
+                    warn(f"cable level {db} dBFS{at}", "far too quiet to decode; raise the "
+                         f"volume (aim for -20 to -10 dBFS), or let it be trimmed: "
+                         f"{APP} level --set")
                 elif db > -1.5:
-                    warn(f"cable level {db} dBFS", "clipping; lower the volume")
+                    warn(f"cable level {db} dBFS{at}", "clipping; lower the volume, or "
+                         f"let it be trimmed: {APP} level --set")
                 else:
-                    print(f"  [ok] cable level {db} dBFS")
+                    print(f"  [ok] cable level {db} dBFS{at}")
         if real and not running:
             warn("nothing is logging", f"{len(real)} stream(s) on the cable but the "
                  f"logger is not running ({APP} start)")
@@ -1081,6 +1131,19 @@ def build_parser():
     sp.add_argument("--force", action="store_true",
                     help="allow pruning while the logger is running")
     sp.set_defaults(func=cmd_prune)
+
+    sp = sub.add_parser("level", help="measure the cable's input level and trim it")
+    sp.add_argument("--set", action="store_true",
+                    help="apply the correction (default: only report it)")
+    sp.add_argument("--target", type=float, default=None,
+                    help="target level in dBFS (default: config, -14)")
+    sp.add_argument("--channel", type=int, default=1,
+                    help="cable channel to measure (default: 1)")
+    sp.add_argument("--seconds", type=float, default=2.0,
+                    help="how long to sample (default: 2)")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="show what would change, change nothing")
+    sp.set_defaults(func=cmd_level)
 
     sp = sub.add_parser("dial", help="show or set the dial stamped on new lines")
     sp.add_argument("freq", nargs="?",

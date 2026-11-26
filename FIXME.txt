@@ -18,11 +18,9 @@ TUNING
   it was measured on one clean frame on a fast CPU: no difference between
   profiles at the decode edge. Re-run it on the SU9300 against real signals
   before trusting any of its verdicts there.
-- Input-level trimming with pactl set-source-volume: currently we only warn
-  about clipping and a dead cable.
 
 CLOCK
-- clock --set: write the measured offset into the system clock (needs root).
+- clock --set is built (needs root); untested against a real clock error.
 - Continuous slew: deliberately not built; it fights systemd-timesyncd and
   moving the clock under a running JS8Call upsets its slot scheduler.
 - Bootstrap when the clock is more than ~2 s off: measure the phase of the

@@ -25,6 +25,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 from . import api, clock, config, pulse, records
@@ -334,6 +335,8 @@ class Engine:
             write_status(self.p, running=False, error=str(exc))
             raise
 
+        if self.cfg.get("level_auto"):
+            threading.Thread(target=self._level_watch, daemon=True).start()
         last_status = 0.0
         last_route = 0.0
         while not self.stop_flag:
@@ -474,6 +477,34 @@ class Engine:
                       f"'{config.APP} route-audio --source <other>_cable.monitor', "
                       "or turn that program's own routing watch off. Leaving it "
                       "alone for 5 minutes.", flush=True)
+
+    def _level_watch(self) -> None:
+        """Trim the cable's input volume as the source drifts.
+
+        Runs in its own thread because a measurement takes a second of audio,
+        and blocking the decode poll for that long would cost a slot.
+        """
+        target = float(self.cfg.get("level_target_db", -14.0))
+        step = float(self.cfg.get("level_max_step_db", 6.0))
+        while not self.stop_flag:
+            time.sleep(20)
+            if self.stop_flag:
+                break
+            try:
+                src = pulse.source_name(1)
+                if not pulse.source_exists(src):
+                    continue
+                db = pulse.peak_dbfs(pulse.capture_samples(1.0, rate=8000, source=src))
+                plan = pulse.trim_volume(db, pulse.source_volume(src),
+                                         target_db=target, max_step_db=step)
+                if plan["action"] == "none":
+                    continue
+                if pulse.set_source_volume(src, plan["percent"]):
+                    print(f"level: {db} dBFS was outside {target:g} dBFS - "
+                          f"volume {plan['action']}d to {plan['percent']:.0f}%",
+                          flush=True)
+            except Exception:                # never kill the loop over a level
+                continue
 
     def _restart(self, dec: Decoder) -> None:
         code = dec.proc.returncode if dec.proc else None
