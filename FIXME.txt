@@ -30,8 +30,12 @@ CLOCK
 - clock --set is built (needs root); untested against a real clock error.
 - Continuous slew: deliberately not built; it fights systemd-timesyncd and
   moving the clock under a running JS8Call upsets its slot scheduler.
-- Bootstrap when the clock is more than ~2 s off: measure the phase of the
-  15 s audio bursts and phase-lock before any decode can succeed.
+- Bootstrap is built (`clock --bootstrap`): spectral-peak correlation against
+  the 15 s grid, refuses below 1.2x frame-vs-gap structure. Limits, measured:
+  needs a strong isolated signal (fixture 3500x, busy 20 m band 1.14x), and
+  ~1 s of the phase is audio pipeline delay. Not built: applying it
+  automatically from the watchdog when nothing has decoded yet, and correcting
+  the pipeline delay by measuring it against a known transmission.
 - Absolute date/time cannot come from JS8 at all (frames carry sub-15 s
   phase, not a date). If that is ever needed, it is a GPS puck, not this.
 

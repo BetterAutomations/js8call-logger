@@ -16,7 +16,7 @@ import sys
 import time
 
 from . import __version__
-from . import api, clock, config, engine, migrate, pulse, records, retention, tune
+from . import api, burst, clock, config, engine, migrate, pulse, records, retention, tune
 
 APP = config.APP
 _STOP = {"now": False}
@@ -316,6 +316,8 @@ def _tail_debug(cfg):
 
 def cmd_clock(args):
     p = config.ensure_dirs()
+    if getattr(args, "bootstrap", False):
+        return _clock_bootstrap(args)
     st = engine.read_status(p)
     off = st.get("clock_offset")
     if off is None:
@@ -326,6 +328,33 @@ def cmd_clock(args):
         ok, note = clock.apply_system(float(off), dry_run=args.dry_run)
         print(("ok           " if ok else "failed       ") + note)
         return 0 if ok else 1
+    return 0
+
+
+def _clock_bootstrap(args) -> int:
+    """Phase-lock to the 15 s frame grid without needing a decode."""
+    seconds = float(getattr(args, "seconds", None) or 20)
+    res = burst.measure(seconds=seconds)
+    if res["phase"] is None:
+        print(f"only {res['windows']} windows of audio - is anything reaching "
+              f"the cable? (doctor)")
+        return 1
+    ratio = res.get("ratio") or 0.0
+    print(f"windows      {res['windows']} in {seconds:g}s")
+    print(f"phase        {res['phase']:+.2f}s off the 15 s boundaries")
+    print(f"structure    {ratio:.2f}x frame-vs-gap")
+    if ratio < 1.2 and not getattr(args, "force", False):
+        print("no clear 15 s structure - this needs one strong, isolated signal.")
+        print("On a busy or noisy band it cannot work; set the clock by hand, or")
+        print("retry when a nearby station is the only thing on the frequency.")
+        return 2
+    print(f"correction   {res['correction']:+.2f}s to the system clock")
+    print("note         includes roughly a second of audio pipeline delay")
+    if args.set:
+        ok, note = clock.apply_system(float(res["correction"]), dry_run=args.dry_run)
+        print(("ok           " if ok else "failed       ") + note)
+        return 0 if ok else 1
+    print("note         add --set to apply it (needs root)")
     return 0
 
 
@@ -1016,7 +1045,10 @@ def cmd_doctor(args):
             print(f"       clock offset: {st.get('clock_offset', 0):+.2f}s "
                   f"from {samples} decodes")
         else:
-            print(f"       clock offset: needs 3 decodes, have {samples}")
+            print(f"       clock offset: needs 3 decodes, have {n}")
+            if not st.get("decodes"):
+                print("       nothing decoded yet - if the clock is more than "
+                      "2 s out, run: js8call-logger clock --bootstrap")
     print(f"       log dir: {p['logs']}")
 
     print("\nInstallation")
@@ -1262,6 +1294,12 @@ def build_parser():
 
     sp = sub.add_parser("clock", help="report or apply the clock offset")
     sp.add_argument("--set", action="store_true", help="write the system clock")
+    sp.add_argument("--bootstrap", action="store_true",
+                    help="measure the clock from burst timing, no decode needed")
+    sp.add_argument("--seconds", type=float, default=20,
+                    help="how long to listen for --bootstrap (default 20)")
+    sp.add_argument("--force", action="store_true",
+                    help="apply a bootstrap result even with weak evidence")
     sp.add_argument("--dry-run", action="store_true")
     sp.set_defaults(func=cmd_clock)
 

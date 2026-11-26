@@ -518,6 +518,35 @@ What this cannot do: JS8 frames start on 15 second boundaries, so they carry
 sub-15-second alignment, not a date. A clock that is hours or days wrong cannot
 be repaired from the air; set the date once by hand.
 
+Bootstrapping without a decode
+-------------------------------
+
+TDRIFT needs a decode, and a decode needs the clock within about 2 s - so a
+clock 30 s out is a deadlock: audio flows, nothing decodes, no offset is ever
+measured. `clock --bootstrap` breaks it by using the frame grid itself:
+
+    $ js8call-logger clock --bootstrap --seconds 45
+    windows      156 in 45s
+    phase        +1.43s off the 15 s boundaries
+    structure    3587.00x frame-vs-gap
+    correction   -1.43s to the system clock
+    note         includes roughly a second of audio pipeline delay
+    note         add --set to apply it (needs root)
+
+It tracks the strongest 31 Hz bin per 128 ms window and correlates that series
+with the 12.6 s frame against each of the 150 possible phases. Broadband level
+cannot do this: a live −20 dB signal moves the RMS by 0.5 %, but a single bin
+sees about −1 dB, and averaging a hundred windows finds it.
+
+Two limits, both measured rather than assumed:
+
+- **It needs one strong, isolated signal.** With the test fixture alone on the
+  cable the structure ratio is thousands to one; on a busy 20 m band it is
+  1.14x, and the command refuses (exit 2) rather than inventing a correction.
+- **About a second of the phase is audio pipeline delay**, not clock error. It
+  varies by a few tenths between runs, which is fine: the point is to get
+  inside the 2 s window, and the TDRIFT median refines the offset from there.
+
 What `start` does by itself
 ---------------------------
 
