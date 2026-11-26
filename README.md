@@ -230,6 +230,38 @@ Commands
 | `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the cable's input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 
+Automatic adjustment
+--------------------
+
+Some things are repaired without being asked, because the failure is silent
+and the fix is safe. These run in the daemon's own threads and re-read
+config.json each pass, so a change takes effect without a restart.
+
+| what | when | setting |
+|---|---|---|
+| level trim | the cable's peak leaves -20..-10 dBFS | `level_auto` (off), `level_auto_interval_s` 20 |
+| decoder restart | audio is flowing but nothing decodes for 300 s | `watchdog` (on), `watchdog_silence_s`, `watchdog_cooldown_s` 600, `watchdog_max_restarts` 4 |
+| cable rebuild | the sink or source disappears (PipeWire restarted) | `cable_watch` (on), `cable_watch_interval_s` 30 |
+| dial restore | the decoder's frequency drifts from the configured dial | `dial_hz` set |
+| prune | `retention_days` old files, at most every `prune_interval_h` | `prune_auto` (off), `prune_interval_h` 24 |
+| decode re-sweep | a reminder only, after `decode_auto_days` | `decode_auto` (off), `decode_auto_days` 14 |
+
+Turn each on or off from the command line:
+
+    js8call-logger level --auto          # keep the level trimmed
+    js8call-logger level --no-auto
+    js8call-logger tune --auto           # remind when a decode sweep is due
+    js8call-logger tune --no-auto
+
+`status` and `doctor` print which of these are armed, and `doctor` warns when a
+decode-depth re-sweep is due.
+
+Two deliberate omissions. The decode-depth sweep is **not** run unattended:
+it needs the cable to itself and a quiet band, and a wrong verdict costs copy.
+`decode_auto` therefore only schedules a reminder. Band scan/hop is also not
+automatic; it needs an SDR that can retune, which the cable and WebSDR sources
+cannot.
+
 Input level
 -----------
 

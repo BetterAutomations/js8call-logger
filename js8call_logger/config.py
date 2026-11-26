@@ -49,7 +49,19 @@ DEFAULTS = {
     # input level
     "level_target_db": -14.0,         # aim here; JS8 wants -20..-10 dBFS
     "level_auto": False,              # daemon trims the source volume as it drifts
-    "level_max_step_db": 6.0,         # per adjustment, so repeated calls converge
+    "level_auto_interval_s": 20,      # how often the level watchdog measures
+    "level_max_step_db": 6.0,         # each adjustment, so repeated calls converge
+    # watchdog: automatic repair while the daemon runs
+    "watchdog": True,                 # restart the decoder if audio flows but
+    "watchdog_silence_s": 300,        # nothing decodes for this long
+    "watchdog_cooldown_s": 600,       # do not restart again sooner than this
+    "watchdog_max_restarts": 4,       # give up after this many in a row
+    "cable_watch": True,              # re-create the cable/loops if they vanish
+    "cable_watch_interval_s": 30,
+    "prune_auto": False,              # run prune at start when due
+    "prune_interval_h": 24,           # ... at most this often
+    "decode_auto": False,             # re-sweep decode depth when due (see tune)
+    "decode_auto_days": 14,           # ... at most this often
     # Refinement passes; false sets JS8_DISABLE_<NAME> for the decoder.
     "decode_env": {"deep_search": True, "ldpc_rescue": True,
                    "coherent_data": True, "redemod": True,

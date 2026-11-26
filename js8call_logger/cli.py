@@ -122,6 +122,17 @@ def cmd_start(args):
     quiet = bool(getattr(args, "quiet", False))
     say = (lambda *a, **k: None) if quiet else print
     if args.foreground:
+        p = config.ensure_dirs()
+        pid = engine.read_pid(p)
+        if not (pid and engine._alive(pid)):
+            try:
+                pruned = retention.maybe_auto_prune(p, cfg)
+            except Exception as exc:         # never block a start over pruning
+                print(f"auto-prune skipped: {exc}", file=sys.stderr, flush=True)
+                pruned = None
+            if pruned:
+                print("auto-prune: " + retention.summary_text(pruned).replace(
+                    "\n", " | "), flush=True)
         eng = engine.Engine(cfg)
         try:
             return eng.run()
@@ -200,6 +211,18 @@ def cmd_status(args):
         print(f"clock offset {off:+.2f}s from {samples} decodes")
     print(f"dial         {st.get('dial_hz', cfg.get('dial_hz'))} Hz")
     print(f"api          {cfg.get('api_host')}:{cfg.get('api_port')}")
+    armed = []
+    if cfg.get("level_auto"):
+        armed.append("level")
+    if cfg.get("watchdog", True):
+        armed.append("watchdog")
+    if cfg.get("cable_watch", True):
+        armed.append("cable")
+    if cfg.get("prune_auto") and int(cfg.get("retention_days") or 0) > 0:
+        armed.append("prune")
+    print(f"automatic    {', '.join(armed) if armed else 'none'}")
+    if decode_sweep_due(cfg, p):
+        print("             decode-depth re-sweep is due: tune --decoder --apply")
     return 0
 
 
@@ -587,6 +610,14 @@ def cmd_dial(args):
 def cmd_level(args):
     """Measure the cable's input level and trim the source volume toward target."""
     cfg = config.load()
+    if getattr(args, "auto", False) or getattr(args, "no_auto", False):
+        cfg["level_auto"] = bool(args.auto)
+        config.save(cfg)
+        print(f"level auto-trim {'on' if args.auto else 'off'}"
+              + (" - the daemon will re-check every "
+                 f"{cfg.get('level_auto_interval_s', 20)}s" if args.auto else ""))
+        if not args.set:
+            return 0
     target = args.target if args.target is not None else float(
         cfg.get("level_target_db", -14.0))
     step_db = float(cfg.get("level_max_step_db", 6.0))
@@ -672,6 +703,13 @@ def cmd_tune_decoder(args):
             cmd_start(argparse.Namespace(foreground=False, quiet=True))
             print("logger started again")
 
+    try:
+        with open(os.path.join(p["run"], "decode-sweep.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"last": time.time(), "levels": levels, "runs": runs}, f)
+    except OSError:
+        pass
+
     print()
     print(tune.table(results))
     best = tune.pick(results)
@@ -721,7 +759,33 @@ def cmd_prune(args):
     return 0
 
 
+def decode_sweep_due(cfg: dict, p: dict) -> bool:
+    """True when a decode-depth re-sweep is older than decode_auto_days."""
+    if not cfg.get("decode_auto"):
+        return False
+    try:
+        with open(os.path.join(p["run"], "decode-sweep.json"), encoding="utf-8") as f:
+            last = float(json.load(f).get("last") or 0)
+    except (OSError, ValueError):
+        return True
+    days = float(cfg.get("decode_auto_days") or 14)
+    return time.time() - last > days * 86400
+
+
 def cmd_tune(args):
+    if getattr(args, "auto", False) or getattr(args, "no_auto", False):
+        cfg = config.load()
+        cfg["decode_auto"] = bool(args.auto)
+        config.save(cfg)
+        if args.auto:
+            print(f"decode auto-tune on - a re-sweep is suggested every "
+                  f"{cfg.get('decode_auto_days', 14)} days; doctor will say when "
+                  "it is due. It is not run unattended: the sweep needs the "
+                  "cable to itself and a quiet band.")
+        else:
+            print("decode auto-tune off")
+        if not getattr(args, "decoder", False):
+            return 0
     if getattr(args, "decoder", False):
         return cmd_tune_decoder(args)
     cfg = config.load()
@@ -884,6 +948,27 @@ def cmd_doctor(_args):
                  f"logger is not running ({APP} start)")
     except pulse.PulseError as exc:
         note("could not inspect", str(exc))
+
+    print("\nAutomatic")
+    auto = []
+    if cfg.get("level_auto"):
+        auto.append(f"level trim every {cfg.get('level_auto_interval_s', 20)}s")
+    if cfg.get("watchdog", True):
+        auto.append(f"decoder restart after {cfg.get('watchdog_silence_s', 300)}s "
+                    "of audio with no decodes")
+    if cfg.get("cable_watch", True):
+        auto.append("cable re-created when the sound server loses it")
+    if cfg.get("prune_auto") and int(cfg.get("retention_days") or 0) > 0:
+        auto.append(f"prune {cfg['retention_days']} days old, at most every "
+                    f"{cfg.get('prune_interval_h', 24)}h")
+    if auto:
+        for a in auto:
+            note(a)
+    else:
+        note("nothing automatic is armed")
+    if decode_sweep_due(cfg, p):
+        warn("decode-depth re-sweep is due",
+             f"run: {APP} tune --decoder --apply")
 
     print("\nLogger")
     if running:
@@ -1114,6 +1199,10 @@ def build_parser():
                     help="save the winning profile to config.json")
     sp.add_argument("--dry-run", action="store_true",
                     help="show the plan without starting anything")
+    sp.add_argument("--auto", action="store_true",
+                    help="remind when a re-sweep is due (decode_auto)")
+    sp.add_argument("--no-auto", action="store_true",
+                    help="stop reminding about decode-depth re-sweeps")
     sp.set_defaults(func=cmd_tune)
 
     sp = sub.add_parser("migrate",
@@ -1143,6 +1232,10 @@ def build_parser():
                     help="how long to sample (default: 2)")
     sp.add_argument("--dry-run", action="store_true",
                     help="show what would change, change nothing")
+    sp.add_argument("--auto", action="store_true",
+                    help="let the daemon keep the level trimmed (watchdog)")
+    sp.add_argument("--no-auto", action="store_true",
+                    help="stop the daemon trimming the level")
     sp.set_defaults(func=cmd_level)
 
     sp = sub.add_parser("dial", help="show or set the dial stamped on new lines")

@@ -9,7 +9,8 @@ from js8call_logger import engine, pulse
 class LevelAutoTest(unittest.TestCase):
     def _run_watch(self, measured, volume, applied):
         eng = engine.Engine.__new__(engine.Engine)   # no Sink, no decoders
-        eng.cfg = {"level_target_db": -14.0, "level_max_step_db": 6.0}
+        eng.cfg = {"level_auto": True, "level_target_db": -14.0,
+                   "level_max_step_db": 6.0, "level_auto_interval_s": 20}
         eng.stop_flag = False
         calls = []
 
@@ -22,6 +23,10 @@ class LevelAutoTest(unittest.TestCase):
                 eng.stop_flag = True
 
         with mock.patch.object(engine.time, "sleep", fake_sleep), \
+             mock.patch.object(engine.config, "load",
+                               return_value={"level_auto": True,
+                                             "level_target_db": -14.0,
+                                             "level_max_step_db": 6.0}), \
              mock.patch.object(pulse, "source_exists", return_value=True), \
              mock.patch.object(pulse, "capture_samples", return_value=b"\x00\x40"), \
              mock.patch.object(pulse, "peak_dbfs", return_value=measured), \

@@ -18,6 +18,12 @@ TUNING
   it was measured on one clean frame on a fast CPU: no difference between
   profiles at the decode edge. Re-run it on the SU9300 against real signals
   before trusting any of its verdicts there.
+- Unattended decode-depth sweep: `decode_auto` only reminds. A real automatic
+  sweep needs the cable to itself and a quiet band, so it is not safe to run
+  behind the operator's back. Revisit if the sweep can be made non-invasive.
+- Notification when the watchdog restarts the decoder: it only writes to the
+  daemon log today. A desktop notification or a line in the daily text file
+  would make a silent fault visible without reading logs.
 
 CLOCK
 - clock --set is built (needs root); untested against a real clock error.

@@ -124,6 +124,34 @@ def ensure_cable(cfg: dict, state_file: str | None = None, channel: int = 1) -> 
             f"{pulse.source_name(channel)}")
 
 
+def watchdog_restart_due(now: float, started_at: float, last_decode: float | None,
+                         last_fire: float, fired: int, cfg: dict,
+                         db: float | None) -> bool:
+    """Should the watchdog restart the decoder right now?
+
+    Pure so the decision can be tested without a daemon or a sound server.
+    The rule: audio is present (so the band is not simply quiet), nothing has
+    decoded for `watchdog_silence_s`, we have not restarted within
+    `watchdog_cooldown_s`, and we have not exhausted `watchdog_max_restarts`.
+    """
+    if not cfg.get("watchdog", True):
+        return False
+    silence = float(cfg.get("watchdog_silence_s", 300))
+    cooldown = float(cfg.get("watchdog_cooldown_s", 600))
+    limit = int(cfg.get("watchdog_max_restarts", 4))
+    if now - started_at < silence:
+        return False
+    if last_decode is not None and now - last_decode < silence:
+        return False
+    if now - last_fire < cooldown:
+        return False
+    if fired >= limit:
+        return False
+    if db is None or db <= -60.0:
+        return False                      # no audio either: a quiet band
+    return True
+
+
 def write_status(p: dict, **fields) -> None:
     path = os.path.join(p["run"], "status.json")
     try:
@@ -283,6 +311,7 @@ class Engine:
         self._moves: dict[str, list[float]] = {}
         self._backoff: dict[str, float] = {}
         self._warned: set[str] = set()
+        self._restart_lock = threading.Lock()
         n = max(1, int(self.cfg.get("channels") or 1))
         self.decoders = [Decoder(self.cfg, self.p, ch) for ch in range(1, n + 1)]
 
@@ -335,8 +364,10 @@ class Engine:
             write_status(self.p, running=False, error=str(exc))
             raise
 
-        if self.cfg.get("level_auto"):
-            threading.Thread(target=self._level_watch, daemon=True).start()
+        # Both watches run always and re-read config, so --auto/--no-auto takes
+        # effect without restarting the daemon; when disabled they just sleep.
+        threading.Thread(target=self._level_watch, daemon=True).start()
+        threading.Thread(target=self._watchdog, daemon=True).start()
         last_status = 0.0
         last_route = 0.0
         while not self.stop_flag:
@@ -346,7 +377,9 @@ class Engine:
             for rec in self.deduper.flush():
                 self._emit(rec)
             for dec in self.decoders:
-                if not dec.alive():
+                # A restart in progress looks "not alive" to this check; without
+                # the flag the loop restarts the same decoder a second time.
+                if not dec.alive() and not getattr(dec, "restarting", False):
                     self._restart(dec)
             if time.time() - last_route > 3:
                 last_route = time.time()
@@ -484,12 +517,23 @@ class Engine:
         Runs in its own thread because a measurement takes a second of audio,
         and blocking the decode poll for that long would cost a slot.
         """
-        target = float(self.cfg.get("level_target_db", -14.0))
-        step = float(self.cfg.get("level_max_step_db", 6.0))
         while not self.stop_flag:
-            time.sleep(20)
+            time.sleep(max(5.0, float(self.cfg.get("level_auto_interval_s") or 20)))
             if self.stop_flag:
                 break
+            try:
+                disk = config.load(create=False)
+                self.cfg["level_auto"] = bool(disk.get("level_auto", False))
+                if not self.cfg["level_auto"]:
+                    continue
+                self.cfg["level_target_db"] = float(
+                    disk.get("level_target_db", -14.0))
+                self.cfg["level_max_step_db"] = float(
+                    disk.get("level_max_step_db", 6.0))
+            except Exception:
+                pass
+            target = float(self.cfg.get("level_target_db", -14.0))
+            step = float(self.cfg.get("level_max_step_db", 6.0))
             try:
                 src = pulse.source_name(1)
                 if not pulse.source_exists(src):
@@ -500,28 +544,128 @@ class Engine:
                 if plan["action"] == "none":
                     continue
                 if pulse.set_source_volume(src, plan["percent"]):
+                    verb = "lowered" if plan["action"] == "lower" else "raised"
                     print(f"level: {db} dBFS was outside {target:g} dBFS - "
-                          f"volume {plan['action']}d to {plan['percent']:.0f}%",
+                          f"volume {verb} to {plan['percent']:.0f}%",
                           flush=True)
             except Exception:                # never kill the loop over a level
                 continue
 
+    def _watchdog(self) -> None:
+        """Repair what the daemon can repair without a human.
+
+        Two jobs, both learned from morse-logger's watchdog:
+
+        * silence: audio is flowing but nothing has decoded for a while. That
+          is a wedged decoder (JS8Call stops decoding when its sound device
+          changes under it), not a quiet band - a quiet band has no audio
+          either. Restart it, with a cooldown so a genuinely dead band does not
+          become a restart loop.
+        * cable: the sink or source vanished, which happens when PipeWire
+          restarts. Re-create the cable, its monitor and any source loops.
+        """
+        last_fire = 0.0
+        fired = 0
+        while not self.stop_flag:
+            time.sleep(max(10.0, float(self.cfg.get("cable_watch_interval_s") or 30)))
+            if self.stop_flag:
+                break
+            try:
+                disk = config.load(create=False)
+                for key in ("watchdog", "watchdog_silence_s", "watchdog_cooldown_s",
+                            "watchdog_max_restarts", "cable_watch", "monitor",
+                            "tap", "source_loops"):
+                    if key in disk:
+                        self.cfg[key] = disk[key]
+            except Exception:
+                pass
+            now = time.time()
+
+            # The dial drifts back on its own: JS8Call restores its saved
+            # frequency after the API call that set it at startup, so the
+            # first minutes of a run can be stamped with the previous band.
+            # Re-assert the configured dial instead of trusting the start.
+            dial = self.cfg.get("dial_hz")
+            if dial:
+                for dec in self.decoders:
+                    try:
+                        cur = dec.api.get_freq().get("DIAL")
+                    except Exception:
+                        continue
+                    if cur and abs(int(cur) - int(dial)) > 1000:
+                        try:
+                            dec.api.set_freq(int(dial), 1500)
+                            print(f"dial watch: decoder was at {int(cur) / 1e6:g} MHz, "
+                                  f"restored {int(dial) / 1e6:g} MHz", flush=True)
+                        except Exception:
+                            pass
+
+            if self.cfg.get("cable_watch", True):
+                try:
+                    st = pulse.cable_status()
+                    if not st.get("sink") or not st.get("source"):
+                        print("cable watch: the cable is gone - re-creating it "
+                              "(sound server restarted?)", flush=True)
+                        for dec in self.decoders:
+                            note = ensure_cable(self.cfg, self.state_file, dec.channel)
+                            if note:
+                                print(note, flush=True)
+                        # A loopback that pointed at the old sink keeps its module
+                        # but loses its playback stream (sink-input 414249 with
+                        # sink -1): it exists, so "already on" is a lie and no
+                        # audio flows. Tear the stale ones down and rebuild them.
+                        try:
+                            pulse.stop_source_loops(state_file=self.state_file)
+                        except Exception:
+                            pass
+                        self._restore_source_loops()
+                except Exception as exc:         # never kill the loop over this
+                    print(f"cable watch: {exc}", file=sys.stderr, flush=True)
+
+            if not self.cfg.get("watchdog", True):
+                continue
+            silence = float(self.cfg.get("watchdog_silence_s") or 300)
+            if self.last_decode and now - self.last_decode < silence:
+                fired = 0
+            try:
+                db = pulse.peak_dbfs(pulse.capture_samples(1.0, rate=1000))
+            except Exception:
+                continue
+            if not watchdog_restart_due(now, self.start_time, self.last_decode,
+                                        last_fire, fired, self.cfg, db):
+                continue
+            limit = int(self.cfg.get("watchdog_max_restarts") or 4)
+            last_fire = now
+            fired += 1
+            print(f"watchdog: audio present ({db} dBFS) but nothing decoded in "
+                  f"{silence / 60:.0f} min - restarting the decoder "
+                  f"(#{fired} of {limit})", flush=True)
+            for dec in self.decoders:
+                self._restart(dec)
+
     def _restart(self, dec: Decoder) -> None:
-        code = dec.proc.returncode if dec.proc else None
-        dec.restarts += 1
-        dec.stop()
-        time.sleep(min(30, 2 * dec.restarts))
-        try:
-            dec.spawn()
-            dec.wait_api()
-            dec.api.set_freq(int(self.cfg["dial_hz"]), 1500)
-        except Exception as exc:             # keep trying on the next tick
-            dec.last_error = str(exc)
-            print(f"restart of decoder {dec.channel} failed: {exc}",
-                  file=sys.stderr, flush=True)
-        with open(os.path.join(self.p["run"], "restarts.log"), "a") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} decoder {dec.channel} "
-                    f"restart #{dec.restarts} after exit {code}\n")
+        # The main loop and the watchdog can both decide to restart; without a
+        # lock that races into two spawns fighting over one API port.
+        with self._restart_lock:
+            dec.restarting = True
+            try:
+                code = dec.proc.returncode if dec.proc else None
+                dec.restarts += 1
+                dec.stop()
+                time.sleep(min(30, 2 * dec.restarts))
+                try:
+                    dec.spawn()
+                    dec.wait_api()
+                    dec.api.set_freq(int(self.cfg["dial_hz"]), 1500)
+                except Exception as exc:         # keep trying on the next tick
+                    dec.last_error = str(exc)
+                    print(f"restart of decoder {dec.channel} failed: {exc}",
+                          file=sys.stderr, flush=True)
+            finally:
+                dec.restarting = False
+            with open(os.path.join(self.p["run"], "restarts.log"), "a") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} decoder {dec.channel} "
+                        f"restart #{dec.restarts} after exit {code}\n")
 
     def _write_runtime_status(self) -> None:
         write_status(

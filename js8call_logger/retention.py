@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import glob
 import gzip
+import json
 import os
 import shutil
 import sqlite3
@@ -128,6 +129,41 @@ def prune(paths: dict, days: int, dry_run: bool = False,
     out["delete"] = bool(delete)
     out["dry_run"] = bool(dry_run)
     return out
+
+
+def _state_path(paths: dict) -> str:
+    return os.path.join(paths["run"], "prune.json")
+
+
+def maybe_auto_prune(paths: dict, cfg: dict) -> dict | None:
+    """Run prune at start when the schedule says it is due.
+
+    Called before the daemon opens its log files, because pruning rewrites the
+    JSONL and a running process holding it open would lose whatever it writes
+    next. That is also why the daemon cannot do this while it runs.
+    """
+    if not cfg.get("prune_auto"):
+        return None
+    days = int(cfg.get("retention_days") or 0)
+    if days <= 0:
+        return None
+    interval = float(cfg.get("prune_interval_h") or 24) * 3600
+    state = _state_path(paths)
+    try:
+        with open(state, encoding="utf-8") as f:
+            last = float(json.load(f).get("last") or 0)
+    except (OSError, ValueError):
+        last = 0.0
+    if time.time() - last < interval:
+        return None
+    result = prune(paths, days)
+    os.makedirs(paths["run"], exist_ok=True)
+    tmp = state + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"last": time.time(), "days": days,
+                   "files": result["files"], "rows": result["rows"]}, f)
+    os.replace(tmp, state)
+    return result
 
 
 def summary_text(result: dict) -> str:
