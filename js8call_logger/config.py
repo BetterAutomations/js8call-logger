@@ -26,6 +26,7 @@ DEFAULTS = {
     "rtl_gain": None,                 # rtl_fm -g (tenths of dB, "49.6")
     "rtl_ppm": None,                  # rtl_fm -p
     "rtl_serial": None,               # rtl_fm -d, when several sticks
+    "rtl_bias_tee": False,            # 12 V on the antenna port (rtl_biast)
     "rtl_sample_rate": 240000,        # rtl_fm -s, decimated to -r cable_rate
     "cable_rate": 48000,
     "monitor": True,                  # hear the cable on the speakers

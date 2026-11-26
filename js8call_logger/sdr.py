@@ -37,6 +37,25 @@ def probe() -> str:
     return out or f"rtl_test said nothing (exit {p.returncode})"
 
 
+def bias_tee(device: str | None, on: bool) -> tuple[bool, str]:
+    """Power the antenna port (12 V), or stop. Needs rtl_biast."""
+    exe = shutil.which("rtl_biast")
+    if not exe:
+        return False, "rtl_biast is not installed (it ships with rtl-sdr)"
+    cmd = [exe]
+    if device:
+        cmd += ["-d", str(device)]
+    cmd += ["-b", "1" if on else "0"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"rtl_biast failed: {exc}"
+    if r.returncode != 0:
+        lines = (r.stderr or r.stdout or "").strip().splitlines()
+        return False, (lines[-1] if lines else "rtl_biast failed")
+    return True, ("bias tee on" if on else "bias tee off")
+
+
 def fm_command(cfg: dict) -> list[str]:
     """The demodulator command line for the configured dial and stick."""
     hz = int(cfg.get("dial_hz") or 0)
@@ -83,6 +102,9 @@ class RtlSource:
         if not binary():
             raise SdrError("rtl_fm is not installed (rtl-sdr package)")
         self.stop()
+        if self.cfg.get("rtl_bias_tee"):
+            ok, msg = bias_tee(self.cfg.get("rtl_serial"), True)
+            self.log(f"sdr: {msg}" if ok else f"sdr: bias tee failed - {msg}")
         rate = int(self.cfg.get("cable_rate") or 48000)
         cmd = fm_command(self.cfg)
         self.log(f"sdr: {' '.join(cmd)}")

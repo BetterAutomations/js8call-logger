@@ -131,6 +131,22 @@ A dongle needs nothing installed beyond the `rtl-sdr` package:
     source: sdr  gain 49.6  ppm 12
     restarting
 
+With the dongle selected, `scan` answers "which band is open" the only way that
+means anything for JS8: it retunes, waits, and counts what the decoder copied.
+
+    $ js8call-logger scan --dwell 60
+    surveying 8 frequencies, 60s each (~8 min)
+      3.578 MHz     0 decodes    0.0/min  snr  --
+      7.078 MHz    11 decodes   11.0/min  snr -12
+    best  7.078 MHz  11.0 decodes/min
+
+A strong signal the decoder cannot read scores zero, which is the point: the
+question is whether stations are readable, not whether the SDR sees energy.
+`--freqs 7.078,14.078` narrows it, and `--apply` leaves the dial on the winner.
+
+`--bias-tee on` powers a 12 V LNA on the antenna port (via `rtl_biast`) and is
+remembered for the next start; `--bias-tee off` removes it.
+
     $ js8call-logger sdr
     source       sdr
     rtl_fm       /usr/bin/rtl_fm
@@ -295,7 +311,8 @@ Commands
 | `js8call-logger tune [--dial HZ] [--channel N]` | lower-level: dial and channel settings straight to one decoder |
 | `js8call-logger prune [--days N] [--dry-run] [--delete]` | archive (or delete) logs older than N days |
 | `js8call-logger migrate [--dry-run]` | fold legacy flat `GROUP*.txt` conversation files into `conversations/groups/` |
-| `js8call-logger sdr [on\|off] [--probe] [--gain G] [--ppm N] [--serial S]` | use an RTL-SDR as the input; `--probe` asks `rtl_test` what it sees |
+| `js8call-logger sdr [on\|off] [--probe] [--gain G] [--ppm N] [--serial S] [--bias-tee on\|off]` | use an RTL-SDR as the input; `--probe` asks `rtl_test` what it sees |
+| `js8call-logger scan [--dwell S] [--freqs LIST] [--apply] [--list]` | survey the JS8 calling frequencies and say which one is open |
 | `js8call-logger input [NAME] [--list] [--clear]` | choose the capture device the decoder listens to (a sound card, or the cable) |
 | `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |

@@ -18,7 +18,7 @@ import time
 
 from . import __version__
 from . import (api, burst, clock, config, engine, migrate, pulse, records,
-               retention, sdr, service, tune)
+               retention, scan, sdr, service, tune)
 
 APP = config.APP
 _STOP = {"now": False}
@@ -719,6 +719,61 @@ def cmd_service(args):
     return 0
 
 
+def cmd_scan(args):
+    """Survey the JS8 calling frequencies and report which one is open."""
+    p = config.ensure_dirs()
+    cfg = config.load()
+    if args.list:
+        for hz in scan.CALLING_HZ:
+            print(f"  {scan.label(hz)}")
+        return 0
+    if (cfg.get("source") or "cable") != "sdr" and not args.force:
+        print("a scan needs a receiver it can retune (source: sdr).")
+        print("  js8call-logger sdr on --gain 40    then retry")
+        print("  --force steps the dial anyway, for a receiver someone else retunes")
+        return 2
+    pid = engine.read_pid(p)
+    if not (pid and engine._alive(pid)):
+        print("the logger is not running - start it first")
+        return 2
+    freqs = scan.parse_freqs(args.freqs) if args.freqs else list(scan.CALLING_HZ)
+    a = api.Js8Api("127.0.0.1", int(cfg.get("api_port") or 2442))
+    try:
+        a.connect(5)
+    except api.ApiError as exc:
+        print(f"cannot reach the decoder: {exc}")
+        return 2
+    jsonl = os.path.join(p["logs"], "js8call-logger.jsonl")
+    try:
+        rows = scan.survey(a, lambda hz, t0: scan.records_since(jsonl, hz, t0),
+                           args.dwell, freqs, log=print)
+    finally:
+        a.close()
+    if not rows:
+        return 1
+    ranked = scan.rank(rows)
+    print()
+    for r in ranked:
+        print(scan.row_line(r))
+    best = ranked[0]
+    print(f"\nbest  {best['label']}  {best['per_min']:.1f} decodes/min")
+    if best["decodes"] == 0:
+        print("nothing decoded anywhere - check the antenna and the level: "
+              "js8call-logger doctor")
+    if args.apply:
+        cfg["dial_hz"] = best["dial"]
+        config.save(cfg)
+        try:
+            a = api.Js8Api("127.0.0.1", int(cfg.get("api_port") or 2442))
+            a.connect(5)
+            a.set_freq(best["dial"], 1500)
+            a.close()
+        except api.ApiError:
+            pass
+        print(f"dial set to {best['label']} and saved")
+    return 0
+
+
 def cmd_sdr(args):
     """Use an RTL-SDR as the input: rtl_fm | pacat into the cable."""
     p = config.ensure_dirs()
@@ -733,6 +788,14 @@ def cmd_sdr(args):
     if args.serial is not None:
         cfg["rtl_serial"] = args.serial
         changed = True
+    if args.bias_tee is not None:
+        on = args.bias_tee == "on"
+        ok, msg = sdr.bias_tee(cfg.get("rtl_serial"), on)
+        print(("ok       " if ok else "failed   ") + msg)
+        if not ok:
+            return 2
+        cfg["rtl_bias_tee"] = on
+        changed = True
     if args.state:
         cfg["source"] = "sdr" if args.state == "on" else "cable"
         changed = True
@@ -741,7 +804,8 @@ def cmd_sdr(args):
         print(f"source: {cfg.get('source')}"
               + (f"  gain {cfg['rtl_gain']}" if cfg.get("rtl_gain") else "")
               + (f"  ppm {cfg['rtl_ppm']}" if cfg.get("rtl_ppm") else "")
-              + (f"  serial {cfg['rtl_serial']}" if cfg.get("rtl_serial") else ""))
+              + (f"  serial {cfg['rtl_serial']}" if cfg.get("rtl_serial") else "")
+              + ("  bias tee" if cfg.get("rtl_bias_tee") else ""))
         if engine.read_pid(p) and engine._alive(engine.read_pid(p)):
             print("restarting")
             return cmd_restart(argparse.Namespace(foreground=False))
@@ -751,6 +815,7 @@ def cmd_sdr(args):
         return 0
     print(f"source       {cfg.get('source')}")
     print(f"rtl_fm       {sdr.binary() or 'not installed (rtl-sdr package)'}")
+    print(f"bias tee     {'on' if cfg.get('rtl_bias_tee') else 'off'}")
     if (cfg.get("source") or "cable") == "sdr":
         try:
             print("command      " + " ".join(sdr.fm_command(cfg)))
@@ -1536,7 +1601,20 @@ def build_parser():
     sp.add_argument("--gain", help="rtl_fm -g, e.g. 49.6")
     sp.add_argument("--ppm", help="rtl_fm -p, frequency correction")
     sp.add_argument("--serial", help="rtl_fm -d, when several sticks are plugged in")
+    sp.add_argument("--bias-tee", dest="bias_tee", choices=["on", "off"],
+                    help="power the antenna port (12 V) for an LNA")
     sp.set_defaults(func=cmd_sdr)
+
+    sp = sub.add_parser("scan", help="survey the JS8 calling frequencies")
+    sp.add_argument("--dwell", type=float, default=60.0,
+                    help="seconds spent on each frequency (default 60)")
+    sp.add_argument("--freqs", help="MHz or kHz, comma or space separated")
+    sp.add_argument("--list", action="store_true", help="just print the list")
+    sp.add_argument("--apply", action="store_true",
+                    help="leave the dial on the winner, and save it")
+    sp.add_argument("--force", action="store_true",
+                    help="run even when the source cannot be retuned")
+    sp.set_defaults(func=cmd_scan)
 
     sp = sub.add_parser("input", help="show, choose or clear the capture device")
     sp.add_argument("device", nargs="?", help="capture source name, e.g. alsa_input.usb-...")

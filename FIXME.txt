@@ -13,9 +13,9 @@ HARDWARE (the only thing that unlocks the rest)
 - Offline install on the disconnected laptop.
 
 NOT BUILT
-- Band scan/hop: step 3.578 / 7.078 / 10.130 / 14.078 / 18.104 / 21.078 /
-  24.922 / 28.078 MHz, score decodes per minute, keep the best. Needs an SDR we
-  can retune; useless for a WebSDR tap or a line input.
+- Unattended band hopping: `scan` and `scan --apply` do it by hand. A watchdog
+  that rescans after 10 min of silence and moves the dial is the next step; it
+  must not fight a receiver someone is tuning themselves (a WebSDR tap).
 - Decode sweep mid-run (it needs the cable to itself) and for a sound-card
   input (the fixture cannot be injected through a receiver).
 - Clock bootstrap: apply it from the watchdog when nothing has decoded yet, and

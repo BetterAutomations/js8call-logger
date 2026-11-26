@@ -22,6 +22,16 @@ silence (-90 dBFS) and doctor named the device; clearing restored the cable.
 
 ## Tuning
 
+**Band survey** — built (`scan`). Steps the eight JS8 calling frequencies,
+dwells on each, counts decodes out of the JSONL, and ranks by decodes per minute
+then median SNR. Proven live: a 25 s dwell on 14.078 counted 2 decodes at
+3.0/min (median +33) when the known frame was played into the cable; the
+refusal without an SDR and `--list` are verified too. Still needs real bands.
+
+**Bias tee** — built (`sdr --bias-tee on|off`, persisted, applied at start
+through `rtl_biast`). The failure path is proven against the real `rtl_biast`
+with no dongle attached; whether an LNA actually powers up needs hardware.
+
 **Decode depth** — built and measured; the answer was "no difference".
 `tune --decoder` sweeps profiles through the `JS8_DISABLE_*` switches, counts
 decodes and CPU per 15 s period, and applies a winner only above a 10 % margin.

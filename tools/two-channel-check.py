@@ -61,7 +61,20 @@ def main() -> int:
         capture_output=True, text=True).stdout
     print(f"channels before: {before}, systemd unit active: {was_service}")
 
-    run("stop")
+    def stop_all():
+        """Let systemd stop its own child; killing it leaves the unit confused."""
+        if was_service:
+            subprocess.run(["systemctl", "--user", "stop", "js8call-logger.service"])
+        else:
+            run("stop")
+
+    def start_all():
+        if was_service:
+            subprocess.run(["systemctl", "--user", "start", "js8call-logger.service"])
+        else:
+            run("start")
+
+    stop_all()
     time.sleep(2)
     run("cable", "up", "--channels", "2")
     run("start")
@@ -100,15 +113,12 @@ def main() -> int:
               else "FAIL: a channel logged nothing")
         return 0 if ok else 1
     finally:
-        run("stop")
+        stop_all()
         time.sleep(1)
         run("cable", "down")
         run("cable", "up", "--channels", str(before),
-        *([] if was_monitor else ["--no-monitor"]))
-        if was_service:
-            run("service", "install")
-        else:
-            run("start")
+            *([] if was_monitor else ["--no-monitor"]))
+        start_all()
         print("restored: channels", before,
               "via", "systemd" if was_service else "start")
 

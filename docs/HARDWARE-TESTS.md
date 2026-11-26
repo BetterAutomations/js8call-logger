@@ -40,6 +40,15 @@ radio, dongle, sound card or the target laptop can settle.
 - [ ] Ten minutes on a long cable or a hub: no `-5` or `-9` errors in `dmesg`.
 - [ ] PPM: with a steady carrier, `js8call-logger level` shows drift-free copy
       after `sdr --ppm N` is set; note the value that fixed it.
+- [ ] Bias tee: `sdr --bias-tee on` reports ok and an LNA on the port powers up
+      (watch the current draw, or the noise floor rising); `sdr` shows
+      `bias tee on`, and it is still on after `restart`. `--bias-tee off`
+      removes the 12 V — never leave it on into a shorted or unpowered feeder.
+- [ ] Band survey: `scan --dwell 60` over all eight frequencies at a time when
+      you can hear activity; the winner must be a band where you can also see
+      decodes in `tail -f`, and `scan --apply` must leave you there.
+- [ ] Survey honesty: point the receiver at a dead band and run `scan`; it must
+      report 0 decodes rather than ranking a strong carrier first.
 
 ## USB sound card / line input
 
