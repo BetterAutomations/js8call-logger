@@ -196,7 +196,7 @@ What is in the repository
     tools/audit_verbs.py every verb documented, no stale docs
     docs/DESIGN.md       decoder facts, API notes, why the pipeline looks like this
     docs/STATUS.md       what is built, and the evidence for each claim
-    docs/HARDWARE-TESTING.md  the checklist for when a radio/dongle arrives
+    docs/HARDWARE-TESTS.md    the checklist for when a radio/dongle arrives
     FIXME.txt            features knowingly not built yet
     install.sh           offline installer (prompts for the data directory)
     refresh-bundle.sh    copies an AppImage into bundle/ and checksums it

@@ -2,7 +2,7 @@ FIXME
 
 Things knowingly not built or not proven yet. Newest at the top.
 Already built, and how it was proven: docs/STATUS.md
-What must be proven on hardware:     docs/HARDWARE-TESTING.md
+What must be proven on hardware:     docs/HARDWARE-TESTS.md
 
 HARDWARE (the only thing that unlocks the rest)
 - RTL-SDR with a real dongle and antenna (the plumbing is built and stubbed).
@@ -33,3 +33,4 @@ DELIBERATELY NOT BUILT
 - Flatpak: deferred until it works on hardware.
 
 == Christopher's notes ==
+Ask again, any new features/bug fixes/hard-won procedures between the two apps?

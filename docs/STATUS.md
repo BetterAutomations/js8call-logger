@@ -2,7 +2,7 @@
 
 `FIXME.txt` holds only what is open. This file records what already works and
 the evidence, so closing an item does not mean losing the reasoning. What must
-be proven on real hardware lives in `HARDWARE-TESTING.md`.
+be proven on real hardware lives in `HARDWARE-TESTS.md`.
 
 ## Sources
 
