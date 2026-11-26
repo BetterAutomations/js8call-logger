@@ -213,6 +213,10 @@ def cmd_status(args):
     print(f"cpu          {cfg.get('_cpu_profile')} ({cfg.get('_cpu_score')} s) "
           f"intervals x{float(cfg.get('_cpu_scale') or 1):g}")
     print(f"api          {cfg.get('api_host')}:{cfg.get('api_port')}")
+    if st.get("last_event"):
+        ago = st.get("last_event_s_ago")
+        when = f"{ago}s ago" if isinstance(ago, int) else "recently"
+        print(f"event        {st['last_event'][:58]} ({when})")
     armed = []
     if cfg.get("level_auto"):
         armed.append("level")

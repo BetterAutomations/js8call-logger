@@ -62,6 +62,7 @@ DEFAULTS = {
     "poll_interval_s": 0.05,
     "route_interval_s": 3,
     "status_interval_s": 5,
+    "notify": True,                   # desktop notification for repair events
     "prune_auto": False,              # run prune at start when due
     "prune_interval_h": 24,           # ... at most this often
     "decode_auto": False,             # re-sweep decode depth when due (see tune)

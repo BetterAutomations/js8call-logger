@@ -21,9 +21,10 @@ TUNING
 - Unattended decode-depth sweep: `decode_auto` only reminds. A real automatic
   sweep needs the cable to itself and a quiet band, so it is not safe to run
   behind the operator's back. Revisit if the sweep can be made non-invasive.
-- Notification when the watchdog restarts the decoder: it only writes to the
-  daemon log today. A desktop notification or a line in the daily text file
-  would make a silent fault visible without reading logs.
+- Notification is built for repair events (watchdog restart, cable rebuild,
+  dial restore): a # line in the daily text, the daemon log, notify-send, and
+  a status line. Not done: rate-limiting a fault that repeats for hours, and
+  sending it anywhere off the machine (mail, MQTT).
 
 CLOCK
 - clock --set is built (needs root); untested against a real clock error.

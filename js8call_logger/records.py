@@ -357,6 +357,14 @@ class Sink:
             self._db.commit()
         return self._db
 
+    def event(self, text: str, ts: str | None = None) -> str:
+        """A system event in the daily text log, marked with # so it can never
+        be mistaken for traffic. Returns the line written."""
+        ts = ts or time.strftime("%Y-%m-%d %H:%M:%S")
+        line = f"{ts}  # {text}"
+        self._open_text(ts[:10]).write(line + "\n")
+        return line
+
     def _text_path(self, day: str) -> str:
         return os.path.join(self.paths["logs"], f"js8call-logger-{day}.txt")
 

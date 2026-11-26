@@ -23,6 +23,7 @@ import fcntl
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -150,6 +151,20 @@ def watchdog_restart_due(now: float, started_at: float, last_decode: float | Non
     if db is None or db <= -60.0:
         return False                      # no audio either: a quiet band
     return True
+
+
+def notify_desktop(text: str) -> bool:
+    """Best effort: a desktop notification if one can be delivered at all."""
+    exe = shutil.which("notify-send")
+    if not exe:
+        return False
+    try:
+        subprocess.run([exe, "--app-name", "js8call-logger", "JS8 logger", text],
+                       timeout=3, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def write_status(p: dict, **fields) -> None:
@@ -595,8 +610,9 @@ class Engine:
                     if cur and abs(int(cur) - int(dial)) > 1000:
                         try:
                             dec.api.set_freq(int(dial), 1500)
-                            print(f"dial watch: decoder was at {int(cur) / 1e6:g} MHz, "
-                                  f"restored {int(dial) / 1e6:g} MHz", flush=True)
+                            self._event(f"dial watch: decoder was at "
+                                        f"{int(cur) / 1e6:g} MHz, restored "
+                                        f"{int(dial) / 1e6:g} MHz")
                         except Exception:
                             pass
 
@@ -604,8 +620,8 @@ class Engine:
                 try:
                     st = pulse.cable_status()
                     if not st.get("sink") or not st.get("source"):
-                        print("cable watch: the cable is gone - re-creating it "
-                              "(sound server restarted?)", flush=True)
+                        self._event("cable watch: the cable was gone - "
+                                    "re-created it (sound server restarted?)")
                         for dec in self.decoders:
                             note = ensure_cable(self.cfg, self.state_file, dec.channel)
                             if note:
@@ -637,9 +653,9 @@ class Engine:
             limit = int(self.cfg.get("watchdog_max_restarts") or 4)
             last_fire = now
             fired += 1
-            print(f"watchdog: audio present ({db} dBFS) but nothing decoded in "
-                  f"{silence / 60:.0f} min - restarting the decoder "
-                  f"(#{fired} of {limit})", flush=True)
+            self._event(f"watchdog: audio present ({db} dBFS) but "
+                        f"nothing decoded for {silence/60:.0f} min - "
+                        f"restarting the decoder (#{fired} of {limit})")
             for dec in self.decoders:
                 self._restart(dec)
 
@@ -667,6 +683,22 @@ class Engine:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} decoder {dec.channel} "
                         f"restart #{dec.restarts} after exit {code}\n")
 
+    def _event(self, text: str) -> None:
+        """Say something happened: in the daily log, the daemon log, and if
+        possible on the desktop. Repeats within ten minutes are not re-sent."""
+        now = time.time()
+        if text == getattr(self, "_last_event", None) and \
+                now - getattr(self, "_last_event_at", 0) < 600:
+            return
+        self._last_event, self._last_event_at = text, now
+        try:
+            self.sink.event(text)
+        except OSError as exc:
+            print(f"event: could not write {exc}", flush=True)
+        print(f"event: {text}", flush=True)
+        if self.cfg.get("notify", True):
+            notify_desktop(text)
+
     def _write_runtime_status(self) -> None:
         write_status(
             self.p, running=True, pid=os.getpid(),
@@ -678,7 +710,11 @@ class Engine:
                                if self.last_decode else None),
             clock_offset=round(self.clock.offset(), 2),
             clock_samples=self.clock.count(),
-            api_port=int(self.cfg["api_port"]), dial_hz=int(self.cfg["dial_hz"]),
+            api_port=int(self.cfg["api_port"]),
+            dial_hz=(int(self.cfg["dial_hz"]) if self.cfg.get("dial_hz") else None),
+            last_event=getattr(self, "_last_event", None),
+            last_event_s_ago=(round(time.time() - self._last_event_at)
+                              if getattr(self, "_last_event_at", None) else None),
         )
 
     def shutdown(self) -> None:

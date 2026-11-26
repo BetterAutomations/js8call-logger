@@ -256,6 +256,20 @@ Turn each on or off from the command line:
 `status` and `doctor` print which of these are armed, and `doctor` warns when a
 decode-depth re-sweep is due.
 
+When the logger repairs itself it says so, three times over, because a silent
+fault is worse than a noisy one:
+
+    2026-11-26 12:00:02  # dial watch: decoder was at 7.078 MHz, restored 14.078 MHz
+
+- a `#` line in the daily text file (never mistakable for a transmission, and
+  the only line in that file that does not follow the fixed-width format)
+- the same line in `run/daemon.log`
+- a desktop notification through `notify-send`, when one can be delivered
+- `status` keeps the last one with its age: `event  dial watch: ... (23s ago)`
+
+Identical events within ten minutes are not repeated. `"notify": false` drops
+the desktop part only.
+
 Two deliberate omissions. The decode-depth sweep is **not** run unattended:
 it needs the cable to itself and a quiet band, and a wrong verdict costs copy.
 `decode_auto` therefore only schedules a reminder. Band scan/hop is also not
