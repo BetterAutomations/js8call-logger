@@ -334,7 +334,8 @@ def cmd_clock(args):
 def _clock_bootstrap(args) -> int:
     """Phase-lock to the 15 s frame grid without needing a decode."""
     seconds = float(getattr(args, "seconds", None) or 20)
-    res = burst.measure(seconds=seconds)
+    cfg = config.load()
+    res = burst.measure(seconds=seconds, source=config.input_device(cfg))
     if res["phase"] is None:
         print(f"only {res['windows']} windows of audio - is anything reaching "
               f"the cable? (doctor)")
@@ -642,6 +643,42 @@ def cmd_dial(args):
     return 0
 
 
+def cmd_input(args):
+    """Show, choose or clear the capture device the decoder listens to."""
+    p = config.ensure_dirs()
+    cfg = config.load()
+    current = config.input_device(cfg)
+
+    if args.list or (args.device is None and not args.clear):
+        for row in pulse.sources():
+            name = row[1] if len(row) > 1 else row[0]
+            print(f"{'*' if name == current else ' '} {name}")
+        if args.device is None and not args.list:
+            print(f"input: {current}"
+                  + ("" if cfg.get("input_device") else " (the cable)"))
+        return 0
+
+    if args.clear:
+        cfg["input_device"] = None
+        config.save(cfg)
+        print(f"input cleared - back to the cable source {config.input_device(cfg)}")
+    else:
+        name = args.device
+        if not pulse.source_exists(name):
+            print(f"no such capture source: {name}")
+            print(f"see: {APP} input --list")
+            return 2
+        cfg["input_device"] = name
+        config.save(cfg)
+        print(f"input set to {name}")
+
+    if engine.read_pid(p) and engine._alive(engine.read_pid(p)):
+        print("restarting so the decoder opens it")
+        return cmd_restart(argparse.Namespace(foreground=False))
+    print("applies at the next start")
+    return 0
+
+
 def cmd_level(args):
     """Measure the cable's input level and trim the source volume toward target."""
     cfg = config.load()
@@ -656,7 +693,7 @@ def cmd_level(args):
     target = args.target if args.target is not None else float(
         cfg.get("level_target_db", -14.0))
     step_db = float(cfg.get("level_max_step_db", 6.0))
-    src = pulse.source_name(args.channel)
+    src = config.input_device(cfg, getattr(args, "channel", 1))
     if not pulse.source_exists(src):
         print(f"no cable source {src} - run 'js8call-logger cable up' first")
         return 2
@@ -914,6 +951,15 @@ def cmd_doctor(args):
     chk("parec", shutil.which("parec"), "pulseaudio-utils / pipewire-pulse")
     chk("pacat", shutil.which("pacat"), "needed by selftest")
     chk("python", sys.version_info >= (3, 10), sys.version.split()[0])
+    dev = config.input_device(cfg)
+    if cfg.get("input_device"):
+        if pulse.source_exists(dev):
+            chk("input device", True, dev)
+        else:
+            warn("input device", f"{dev} is configured but not present - "
+                 f"run: {APP} input --list (falling back to nothing)")
+    else:
+        note("input device", f"{dev} (the cable)")
 
     print("\nAudio server")
     if pulse.available():
@@ -968,14 +1014,15 @@ def cmd_doctor(args):
             print(f"  [ok] {who} -> {kind} (stream {r.get('index')})")
         real = rows
         if real and pulse.cable_status().get("source"):
-            sample = pulse.capture_samples(1.0, rate=8000)
+            sample = pulse.capture_samples(
+                1.0, rate=8000, source=config.input_device(cfg))
             if not any(sample):
                 warn("digital silence", "the streams are open but delivering zeros - "
                      "the application has lost the audio device; restart it fully "
                      "(a tab reload is not enough)")
             else:
                 db = pulse.peak_dbfs(sample)
-                vol = pulse.source_volume(pulse.source_name(1))
+                vol = pulse.source_volume(config.input_device(cfg))
                 at = f" at volume {vol:.0f}%" if vol is not None else ""
                 if db < -30:
                     warn(f"cable level {db} dBFS{at}", "far too quiet to decode; raise the "
@@ -1045,7 +1092,7 @@ def cmd_doctor(args):
             print(f"       clock offset: {st.get('clock_offset', 0):+.2f}s "
                   f"from {samples} decodes")
         else:
-            print(f"       clock offset: needs 3 decodes, have {n}")
+            print(f"       clock offset: needs 3 decodes, have {samples}")
             if not st.get("decodes"):
                 print("       nothing decoded yet - if the clock is more than "
                       "2 s out, run: js8call-logger clock --bootstrap")
@@ -1267,7 +1314,13 @@ def build_parser():
                     help="allow pruning while the logger is running")
     sp.set_defaults(func=cmd_prune)
 
-    sp = sub.add_parser("level", help="measure the cable's input level and trim it")
+    sp = sub.add_parser("input", help="show, choose or clear the capture device")
+    sp.add_argument("device", nargs="?", help="capture source name, e.g. alsa_input.usb-...")
+    sp.add_argument("--list", action="store_true", help="list capture sources")
+    sp.add_argument("--clear", action="store_true", help="go back to the cable")
+    sp.set_defaults(func=cmd_input)
+
+    sp = sub.add_parser("level", help="measure or trim the input level")
     sp.add_argument("--set", action="store_true",
                     help="apply the correction (default: only report it)")
     sp.add_argument("--target", type=float, default=None,

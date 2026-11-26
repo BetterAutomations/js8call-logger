@@ -10,7 +10,8 @@ class LevelAutoTest(unittest.TestCase):
     def _run_watch(self, measured, volume, applied):
         eng = engine.Engine.__new__(engine.Engine)   # no Sink, no decoders
         eng.cfg = {"level_auto": True, "level_target_db": -14.0,
-                   "level_max_step_db": 6.0, "level_auto_interval_s": 20}
+                   "level_max_step_db": 6.0, "level_auto_interval_s": 20,
+                   "cable": "js8call-logger_cable"}
         eng.stop_flag = False
         calls = []
 
@@ -26,9 +27,10 @@ class LevelAutoTest(unittest.TestCase):
              mock.patch.object(engine.config, "load",
                                return_value={"level_auto": True,
                                              "level_target_db": -14.0,
-                                             "level_max_step_db": 6.0}), \
+                                             "level_max_step_db": 6.0,
+                                             "cable": "js8call-logger_cable"}), \
              mock.patch.object(pulse, "source_exists", return_value=True), \
-             mock.patch.object(pulse, "capture_samples", return_value=b"\x00\x40"), \
+             mock.patch.object(pulse, "capture_samples", return_value=b"\x00\x40" * 800), \
              mock.patch.object(pulse, "peak_dbfs", return_value=measured), \
              mock.patch.object(pulse, "source_volume", return_value=volume), \
              mock.patch.object(pulse, "set_source_volume",

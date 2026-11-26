@@ -139,7 +139,10 @@ def save(cfg: dict, p: dict | None = None) -> None:
     os.replace(tmp, p["config"])
 
 
-def input_device(cfg: dict) -> str:
+def input_device(cfg: dict, channel: int = 1) -> str:
+    """Where the decoder really listens: a chosen device, else the cable."""
+    if channel > 1:
+        return f"{cfg['cable']}_src_{channel}"
     return cfg.get("input_device") or (cfg["cable"] + "_src")
 
 

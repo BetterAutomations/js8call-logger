@@ -5,8 +5,12 @@ Things knowingly not built yet. Newest at the top.
 SOURCES
 - RTL-SDR input: rtl_fm -M usb | pacat into js8call-logger_cable, select
   stick by serial, "no supported device" = kernel dvb_usb_rtl28xxu holding it.
-- USB sound card line input: should work already by naming the device in
-  config (input_device), but it has never been run against real hardware.
+- USB sound card line input: selectable now (`input NAME`, `input --list`),
+  and `level`, `doctor` and `clock --bootstrap` all follow the chosen device
+  instead of the cable. Exercised against real ALSA capture devices on this
+  machine (a mic with nothing plugged in reports digital silence, correctly).
+  Still untested: an actual receiver feeding the card, and hot-plug (the device
+  name changes with the USB port on some cards).
 
 TUNING
 - Band scan/hop for SDR sources: step the JS8 calling frequencies

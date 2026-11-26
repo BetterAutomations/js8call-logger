@@ -46,7 +46,7 @@ def write_ini(cfg: dict, p: dict, channel: int = 1) -> str:
     """Write channel N's JS8Call.ini; return its path."""
     conf_dir = os.path.join(p["js8call"], f"ch{channel}", "config-home")
     os.makedirs(conf_dir, exist_ok=True)
-    dev = pulse.source_name(channel) if channel > 1 else config.input_device(cfg)
+    dev = config.input_device(cfg, channel)
     ini = f"""[Configuration]
 MyCall={cfg['mycall']}
 MyGrid={cfg['mygrid']}
@@ -550,7 +550,7 @@ class Engine:
             target = float(self.cfg.get("level_target_db", -14.0))
             step = float(self.cfg.get("level_max_step_db", 6.0))
             try:
-                src = pulse.source_name(1)
+                src = config.input_device(self.cfg)
                 if not pulse.source_exists(src):
                     continue
                 db = pulse.peak_dbfs(pulse.capture_samples(1.0, rate=8000, source=src))
@@ -644,7 +644,8 @@ class Engine:
             if self.last_decode and now - self.last_decode < silence:
                 fired = 0
             try:
-                db = pulse.peak_dbfs(pulse.capture_samples(1.0, rate=1000))
+                db = pulse.peak_dbfs(pulse.capture_samples(
+                    1.0, rate=8000, source=config.input_device(self.cfg)))
             except Exception:
                 continue
             if not watchdog_restart_due(now, self.start_time, self.last_decode,

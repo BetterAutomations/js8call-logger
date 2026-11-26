@@ -92,8 +92,28 @@ filtering something".
 
 ### Hardware
 
-A receiver on a USB sound card needs nothing but `"input_device"` in
-config.json set to the card's name (`pactl list short sources` shows them).
+A receiver on a USB sound card needs no cable at all — point the decoder at the
+card's capture device:
+
+    $ js8call-logger input --list
+      alsa_output.pci-0000_00_1f.3.HiFi__Headphones__sink.monitor
+    * js8call-logger_cable_src
+      alsa_input.pci-0000_00_1f.3.HiFi__Mic1__source
+
+    $ js8call-logger input alsa_input.pci-0000_00_1f.3.HiFi__Mic1__source
+    input set to alsa_input.pci-0000_00_1f.3.HiFi__Mic1__source
+    restarting so the decoder opens it
+    restarted
+
+    $ js8call-logger level
+    level: -9.8 dBFS  volume 100%  target -14 dBFS  [clipping]
+
+Everything that measures or trims — `level`, `doctor`, `clock --bootstrap` —
+follows the chosen device, so you get the same verdicts as on the cable.
+`input --clear` goes back to the cable, which is what the WebSDR and RTL-SDR
+paths use. This was exercised against real ALSA capture devices on this machine
+(mic reported −90 dBFS digital silence, as expected with nothing plugged in);
+an actual receiver feeding it remains untested.
 
 An RTL-SDR is not built yet (see FIXME.txt): the plan is `rtl_fm -M usb |
 pacat` into the cable, the same pattern morse-logger uses, plus a later band
@@ -227,7 +247,8 @@ Commands
 | `js8call-logger tune [--dial HZ] [--channel N]` | lower-level: dial and channel settings straight to one decoder |
 | `js8call-logger prune [--days N] [--dry-run] [--delete]` | archive (or delete) logs older than N days |
 | `js8call-logger migrate [--dry-run]` | fold legacy flat `GROUP*.txt` conversation files into `conversations/groups/` |
-| `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the cable's input level and trim the source volume toward the target |
+| `js8call-logger input [NAME] [--list] [--clear]` | choose the capture device the decoder listens to (a sound card, or the cable) |
+| `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 
 Automatic adjustment
