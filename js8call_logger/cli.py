@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -1214,7 +1215,8 @@ def cmd_selftest(args):
     chk("heartbeat detect", bool(hb and hb["heartbeat"]))
 
     if not getattr(args, "offline", False):
-        fails += _selftest_live(chk)
+        fails += _selftest_live(chk, getattr(args, "recording", None),
+                                getattr(args, "expect", None))
     return 0 if fails == 0 else 1
 
 
@@ -1235,7 +1237,65 @@ def _start_logger() -> bool:
     return True
 
 
-def _selftest_live(chk) -> int:
+def _similarity(expected: str, got: str) -> float:
+    """How much of the expected text came back, 0..1 (morse-logger's measure)."""
+    import difflib
+
+    def norm(s: str) -> str:
+        return re.sub(r"[^A-Z0-9 ]+", "", (s or "").upper()).strip()
+
+    a, b = norm(expected), norm(got)
+    if not a:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _play_file(path: str, sink: str) -> None:
+    """Play a wav or raw s16 file into the cable, by preference with pw-play."""
+    exe = shutil.which("pw-play")
+    if exe and path.lower().endswith(".wav"):
+        subprocess.run([exe, "--target=" + sink, path], check=True)
+        return
+    import wave
+
+    rate, data = 48000, None
+    if path.lower().endswith(".wav"):
+        with wave.open(path, "rb") as w:
+            rate, data = w.getframerate(), w.readframes(w.getnframes())
+    with open(path, "rb") as f:
+        subprocess.run(["pacat", "--device=" + sink, f"--rate={rate}",
+                        "--channels=1", "--format=s16le", "--raw"],
+                       input=(data if data is not None else f.read()), check=True)
+
+
+def _last_text(p: dict, expect: str | None = None, tail: int = 25) -> str:
+    """Best matching text among the newest records.
+
+    With a whole recording replayed, several frames land at once; judging the
+    single newest line would depend on arrival order.
+    """
+    texts: list[str] = []
+    try:
+        with open(os.path.join(p["logs"], "js8call-logger.jsonl"),
+                  encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    texts.append(line)
+    except OSError:
+        return ""
+    best, best_ratio = "", -1.0
+    for line in texts[-tail:]:
+        try:
+            text = json.loads(line).get("text") or ""
+        except ValueError:
+            continue
+        ratio = _similarity(expect, text) if expect else 0.0
+        if ratio > best_ratio:
+            best, best_ratio = text, ratio
+    return best
+
+
+def _selftest_live(chk, recording: str | None = None, expect: str | None = None) -> int:
     """Play a known JS8 frame into the cable and wait for it to be logged.
 
     This is the check that proves the whole chain: the bundled decoder runs,
@@ -1245,12 +1305,23 @@ def _selftest_live(chk) -> int:
     """
     cfg = config.load(create=False)
     p = config.ensure_dirs()
-    fixture = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                           "tests", "fixtures", "n0call-cq.raw")
+    fixture = recording or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "tests", "fixtures", "n0call-cq.raw")
     if not os.path.exists(fixture):
         chk("live decode", False, f"fixture missing: {fixture}")
         return 1
     started = _start_logger()
+    loops = []
+    if recording:
+        # Give the replay the cable to itself; mixed with a live feed the
+        # frames interfere and nothing decodes.
+        loops = list(cfg.get("source_loops") or [])
+        if loops:
+            try:
+                pulse.stop_source_loops()
+            except Exception:                         # noqa: BLE001
+                pass
     try:
         if not engine.read_status(p).get("running"):
             chk("live decode", False, "could not start the logger; see run/daemon.log")
@@ -1262,20 +1333,32 @@ def _selftest_live(chk) -> int:
         before = int(engine.read_status(p).get("decodes") or 0)
         # JS8 frames begin on a 15 s boundary; start just after one.
         time.sleep(max(0, (int(time.time() // 15) + 1) * 15 - time.time()))
-        with open(fixture, "rb") as f:
-            subprocess.run(["pacat", "--device=" + pulse.sink_name(1),
-                            "--rate=48000", "--channels=1",
-                            "--format=s16le", "--raw"], stdin=f)
-        deadline = time.time() + 30
+        _play_file(fixture, pulse.sink_name(1))
+        deadline = time.time() + 60
+        best, ratio = "", -1.0
         while time.time() < deadline:
             if int(engine.read_status(p).get("decodes") or 0) > before:
-                chk("live decode", True, "frame decoded and logged")
-                return 0
+                best = _last_text(p, expect)
+                ratio = _similarity(expect, best) if expect else 1.0
+                if ratio >= 0.5:
+                    break
             time.sleep(1)
+        if expect:
+            chk("live decode", ratio >= 0.5,
+                f"{ratio:.0%} of expected: {best[:40]!r}")
+            return 0 if ratio >= 0.5 else 1
+        if best:
+            chk("live decode", True, f"decoded: {best[:40]!r}")
+            return 0
         chk("live decode", False,
             "nothing decoded in 30 s (audio path or clock; see --js8call-debug)")
         return 1
     finally:
+        for src in loops:
+            try:
+                pulse.loop_source(src)
+            except Exception:                         # noqa: BLE001
+                pass
         if started:
             engine.stop(p)
 
@@ -1424,7 +1507,9 @@ def build_parser():
                     help="re-measure the CPU and refresh the cached profile")
     sp.set_defaults(func=cmd_doctor)
 
-    sp = sub.add_parser("selftest", help="check the log pipeline and decode a frame")
+    sp = sub.add_parser("selftest", help="check the pipeline and the decoder")
+    sp.add_argument("--recording", help="replay this wav/raw instead of the fixture")
+    sp.add_argument("--expect", help="text the replay should decode to")
     sp.add_argument("--offline", action="store_true",
                     help="skip the decode test (no cable, no decoder)")
     sp.add_argument("--live", action="store_true", help=argparse.SUPPRESS)

@@ -127,7 +127,11 @@ def measure(source: str | None = None, seconds: float = 20.0,
     of the capture, because parec starts when it starts.
     """
     data = pulse.capture_samples(seconds, rate, source=source)
-    t_end = time.time()
+    return analyse(data, time.time(), rate=rate, slot=slot)
+
+
+def analyse(data: bytes, t_end: float, rate: int = RATE, slot: float = SLOT) -> dict:
+    """The same measurement on audio already in hand (recordings, tests)."""
     series = tone_series(data, rate)
     if len(series) < int(slot / (HOP / rate)) + 2:
         return {"phase": None, "correction": None, "score": None,

@@ -51,6 +51,15 @@ PACKAGING
   than glibc 2.38. Not needed for the target machine (Lubuntu 26.10).
 - Flatpak, as morse-logger eventually wants.
 
+TEST FIXTURES
+- The 25 Nov WebSDR capture (7078 kHz, 69 min, 8 kHz mono) turned out to hold
+  no decodable JS8 in its first 30 s: verified with a dedicated decoder on an
+  otherwise silent cable, zero decodes. It is still useful as the busy-band
+  case (structure ratio 1.07, so clock bootstrap refuses). What is missing is
+  a real recording of traffic we know decoded - record from the 20 m feed
+  while the log is filling, then slice 30 s and add it as
+  selftest --recording --expect.
+
 REAL HARDWARE
 - The whole checklist lives in docs/HARDWARE-TESTING.md. Nothing in it has
   been run yet: every path so far was proven with virtual sinks, stub

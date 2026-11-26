@@ -168,13 +168,22 @@ The bundle is one file: `bundle/JS8Call.AppImage` (~59 MB, 3.0.3, checksum in
 
 `tests/fixtures/n0call-cq.raw` is a recorded JS8 frame that `selftest` plays
 into the cable, so a fresh install can prove itself with no radio attached.
+`tests/fixtures/websdr-2026-11-25T1453Z-30s.wav` is 30 s of real off-air audio
+from a busy band; it is what proves `clock --bootstrap` refuses when there is no
+clean slot structure to measure.
+
+`selftest --recording FILE --expect TEXT` replays any wav/raw instead of the
+built-in frame, scores the decode against the expected text as a similarity
+ratio (morse-logger's measure) and passes at 50 % or better; it pauses source
+loops first so the recording has the cable to itself.
 
 What is in the repository
 -------------------------
 
     js8call_logger/      the program (standard library only - no pip, no venv)
     js8call-logger       launcher, for running from a checkout
-    tests/               unit tests and the replay fixture
+    tests/               unit tests, the replay fixture, 30 s of real audio
+    tools/audit_verbs.py every verb documented, no stale docs
     docs/DESIGN.md       decoder facts, API notes, why the pipeline looks like this
     docs/HARDWARE-TESTING.md  the checklist for when a radio/dongle arrives
     FIXME.txt            features knowingly not built yet

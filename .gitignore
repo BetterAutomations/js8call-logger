@@ -3,3 +3,6 @@ __pycache__/
 bundle/JS8Call.AppImage
 *.db
 *.jsonl
+
+# raw captures stay local; slice a fixture into tests/fixtures instead
+tests/websdr_recording*.mp3
