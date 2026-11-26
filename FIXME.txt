@@ -1,73 +1,35 @@
 FIXME
 
-Things knowingly not built yet. Newest at the top.
+Things knowingly not built or not proven yet. Newest at the top.
+Already built, and how it was proven: docs/STATUS.md
+What must be proven on hardware:     docs/HARDWARE-TESTING.md
 
-SOURCES
-- RTL-SDR input is built (`sdr on`, `sdr --probe`, `--gain/--ppm/--serial`);
-  rtl_fm | pacat into the cable with -E direct2 below 24 MHz, supervised with
-  backoff, and the DVB-driver case explained in an event. Untested with a real
-  dongle (no hardware yet); the plumbing is covered by stub-executable tests.
-- USB sound card line input: selectable now (`input NAME`, `input --list`),
-  and `level`, `doctor` and `clock --bootstrap` all follow the chosen device
-  instead of the cable. Exercised against real ALSA capture devices on this
-  machine (a mic with nothing plugged in reports digital silence, correctly).
-  Still untested: an actual receiver feeding the card, and hot-plug (the device
-  name changes with the USB port on some cards).
+HARDWARE (the only thing that unlocks the rest)
+- RTL-SDR with a real dongle and antenna (the plumbing is built and stubbed).
+- A USB sound card with a receiver feeding it; hot-plug device names.
+- Two different signals at once, which needs a second receiver.
+- The SU9300: CPU profile, intervals x4, decoder cost per period.
+- A clock that is genuinely wrong, for `clock --set` and a real correction.
+- Offline install on the disconnected laptop.
 
-TUNING
-- Band scan/hop for SDR sources: step the JS8 calling frequencies
-  (3.578 / 7.078 / 10.130 / 14.078 / 18.104 / 21.078 / 24.922 / 28.078 MHz),
-  score candidates by decodes per minute, keep the best. Needs an SDR we can
-  retune; useless for a WebSDR tap or a line input, where the receiver is the
-  operator's.
-- Decode-depth tuning is built (`tune --decoder`, see README and DESIGN), but
-  it was measured on one clean frame on a fast CPU: no difference between
-  profiles at the decode edge. Re-run it on the SU9300 against real signals
-  before trusting any of its verdicts there.
-- Decode sweep is automated at start (`decode_auto`, `decode_auto_days`,
-  `decode_auto_levels`): pauses loops, sweeps one level, applies only a >10 %
-  win. Not done: running it mid-run, and sweeping when the input is a sound
-  card (no way to inject the fixture).
-- Notification is built for repair events (watchdog restart, cable rebuild,
-  dial restore): a # line in the daily text, the daemon log, notify-send, and
-  a status line. Not done: rate-limiting a fault that repeats for hours, and
-  sending it anywhere off the machine (mail, MQTT).
+NOT BUILT
+- Band scan/hop: step 3.578 / 7.078 / 10.130 / 14.078 / 18.104 / 21.078 /
+  24.922 / 28.078 MHz, score decodes per minute, keep the best. Needs an SDR we
+  can retune; useless for a WebSDR tap or a line input.
+- Decode sweep mid-run (it needs the cable to itself) and for a sound-card
+  input (the fixture cannot be injected through a receiver).
+- Clock bootstrap: apply it from the watchdog when nothing has decoded yet, and
+  calibrate the ~1 s audio pipeline delay against a known transmission.
+- Notification: rate-limit a fault that repeats for hours; deliver off-machine
+  (mail, MQTT) through a notify_command hook.
 
-CLOCK
-- clock --set is built (needs root); untested against a real clock error.
-- Continuous slew: deliberately not built; it fights systemd-timesyncd and
-  moving the clock under a running JS8Call upsets its slot scheduler.
-- Bootstrap is built (`clock --bootstrap`): spectral-peak correlation against
-  the 15 s grid, refuses below 1.2x frame-vs-gap structure. Limits, measured:
-  needs a strong isolated signal (fixture 3500x, busy 20 m band 1.14x), and
-  ~1 s of the phase is audio pipeline delay. Not built: applying it
-  automatically from the watchdog when nothing has decoded yet, and correcting
-  the pipeline delay by measuring it against a known transmission.
-- Absolute date/time cannot come from JS8 at all (frames carry sub-15 s
-  phase, not a date). If that is ever needed, it is a GPS puck, not this.
+DELIBERATELY NOT BUILT
+- Continuous slew: it fights systemd-timesyncd, and moving the clock under a
+  running JS8Call upsets its slot scheduler.
+- Absolute date/time: cannot come from JS8 at all (frames carry sub-15 s
+  phase, not a date). If that is ever needed it is a GPS puck, not this.
+- GLIBC fallback build (JS8Call 2.5.2 / Qt5 / PortAudio) for distros older than
+  glibc 2.38: not needed for Lubuntu 26.10.
+- Flatpak: deferred until it works on hardware.
 
-PACKAGING
-- GLIBC fallback build (JS8Call 2.5.2 / Qt5 / PortAudio) for distros older
-  than glibc 2.38. Not needed for the target machine (Lubuntu 26.10).
-- Flatpak, as morse-logger eventually wants.
-
-MULTI-CHANNEL
-- Two channels are proven end to end by tools/two-channel-check.py: two cables,
-  the same known frame played into both, one record per channel in the log.
-  Not proven: two *different* signals at once, which needs a second receiver.
-
-TEST FIXTURES
-- A decodable recording now exists: tests/fixtures/live-2026-11-26T1622Z-30s.wav,
-  30 s captured off the live cable while the log was filling, chosen from the
-  records themselves, and verified by replay (93 % of expected text).
-- The 25 Nov WebSDR capture (7078 kHz, 69 min, 8 kHz mono) turned out to hold
-  no decodable JS8 in its first 30 s: verified with a dedicated decoder on an
-  otherwise silent cable, zero decodes. It is still useful as the busy-band
-  case (structure ratio 1.07, so clock bootstrap refuses), nothing more.
-
-REAL HARDWARE
-- The whole checklist lives in docs/HARDWARE-TESTING.md. Nothing in it has
-  been run yet: every path so far was proven with virtual sinks, stub
-  executables (rtl_fm, pacat) or a known-good recording.
-
-== Christopher's notes==
+== Christopher's notes ==

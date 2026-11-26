@@ -195,6 +195,7 @@ What is in the repository
     tests/               unit tests, the replay fixture, 30 s of real audio
     tools/audit_verbs.py every verb documented, no stale docs
     docs/DESIGN.md       decoder facts, API notes, why the pipeline looks like this
+    docs/STATUS.md       what is built, and the evidence for each claim
     docs/HARDWARE-TESTING.md  the checklist for when a radio/dongle arrives
     FIXME.txt            features knowingly not built yet
     install.sh           offline installer (prompts for the data directory)
