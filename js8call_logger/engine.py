@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 
-from . import api, clock, config, pulse, records
+from . import api, clock, config, pulse, records, sdr
 
 APP = config.APP
 
@@ -359,6 +359,7 @@ class Engine:
                 if note:
                     print(note, flush=True)
             self._restore_source_loops()
+            self._start_sdr()
             for dec in self.decoders:
                 dec.spawn()
             for dec in self.decoders:
@@ -616,6 +617,10 @@ class Engine:
                         except Exception:
                             pass
 
+            # The stick is supervised whatever the decoder watchdog is set to:
+            # a dead rtl_fm means silence, not a wedged decoder.
+            self._check_sdr()
+
             if self.cfg.get("cable_watch", True):
                 try:
                     st = pulse.cable_status()
@@ -684,6 +689,40 @@ class Engine:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} decoder {dec.channel} "
                         f"restart #{dec.restarts} after exit {code}\n")
 
+    def _check_sdr(self) -> None:
+        """Restart the stick when it dies, backing off each failure."""
+        src = getattr(self, "sdr", None)
+        if src is None:
+            return
+        why = src.check()
+        if not why:
+            return
+        now = time.time()
+        wait = min(600, 30 * (2 ** getattr(self, "_sdr_fails", 0)))
+        if now - getattr(self, "_sdr_try", 0) < wait:
+            return
+        self._sdr_try = now
+        self._event(f"sdr stopped ({why}) - restarting")
+        try:
+            src.start()
+            self._sdr_fails = 0
+        except sdr.SdrError as exc:
+            self._sdr_fails = getattr(self, "_sdr_fails", 0) + 1
+            self._event(f"sdr: {exc}")
+
+    def _start_sdr(self) -> None:
+        """Bring up rtl_fm when the configured source is a stick."""
+        if (self.cfg.get("source") or "cable") != "sdr":
+            self.sdr = None
+            return
+        self.sdr = sdr.RtlSource(self.cfg, pulse.sink_name(1),
+                                 log=lambda m: print(m, flush=True))
+        try:
+            self.sdr.start()
+        except sdr.SdrError as exc:
+            print(f"sdr: {exc}", flush=True)
+            self._event(f"sdr: {exc}")
+
     def _event(self, text: str) -> None:
         """Say something happened: in the daily log, the daemon log, and if
         possible on the desktop. Repeats within ten minutes are not re-sent."""
@@ -719,6 +758,8 @@ class Engine:
         )
 
     def shutdown(self) -> None:
+        if getattr(self, "sdr", None) is not None:
+            self.sdr.stop()
         for dec in self.decoders:
             dec.stop()
         self.sink.close()

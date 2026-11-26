@@ -3,8 +3,10 @@ FIXME
 Things knowingly not built yet. Newest at the top.
 
 SOURCES
-- RTL-SDR input: rtl_fm -M usb | pacat into js8call-logger_cable, select
-  stick by serial, "no supported device" = kernel dvb_usb_rtl28xxu holding it.
+- RTL-SDR input is built (`sdr on`, `sdr --probe`, `--gain/--ppm/--serial`);
+  rtl_fm | pacat into the cable with -E direct2 below 24 MHz, supervised with
+  backoff, and the DVB-driver case explained in an event. Untested with a real
+  dongle (no hardware yet); the plumbing is covered by stub-executable tests.
 - USB sound card line input: selectable now (`input NAME`, `input --list`),
   and `level`, `doctor` and `clock --bootstrap` all follow the chosen device
   instead of the cable. Exercised against real ALSA capture devices on this
@@ -22,9 +24,10 @@ TUNING
   it was measured on one clean frame on a fast CPU: no difference between
   profiles at the decode edge. Re-run it on the SU9300 against real signals
   before trusting any of its verdicts there.
-- Unattended decode-depth sweep: `decode_auto` only reminds. A real automatic
-  sweep needs the cable to itself and a quiet band, so it is not safe to run
-  behind the operator's back. Revisit if the sweep can be made non-invasive.
+- Decode sweep is automated at start (`decode_auto`, `decode_auto_days`,
+  `decode_auto_levels`): pauses loops, sweeps one level, applies only a >10 %
+  win. Not done: running it mid-run, and sweeping when the input is a sound
+  card (no way to inject the fixture).
 - Notification is built for repair events (watchdog restart, cable rebuild,
   dial restore): a # line in the daily text, the daemon log, notify-send, and
   a status line. Not done: rate-limiting a fault that repeats for hours, and

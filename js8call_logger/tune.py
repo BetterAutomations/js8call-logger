@@ -24,6 +24,7 @@ profiles, not for predicting real-world copy.
 from __future__ import annotations
 
 import array
+import json
 import os
 import shutil
 import socket
@@ -129,6 +130,110 @@ def pick(results: list[dict]) -> dict | None:
     return ranked[0] if ranked else None
 
 
+def current_profile(cfg: dict) -> str:
+    """Which named profile the current decode_env corresponds to."""
+    off = {k for k, v in (cfg.get("decode_env") or {}).items() if not v}
+    for name, overrides in PROFILES.items():
+        if {k for k, v in overrides.items() if not v} == off:
+            return name
+    return "custom"
+
+
+def apply_profile(cfg: dict, name: str) -> dict:
+    cfg["decode_env"] = {p: (p not in PROFILES[name]) for p in PASSES}
+    return cfg["decode_env"]
+
+
+def _state_path(home: str) -> str:
+    return os.path.join(home, "run", "tune.json")
+
+
+def read_state(home: str) -> dict:
+    try:
+        with open(_state_path(home), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(home: str, **fields) -> dict:
+    st = read_state(home)
+    st.update(fields)
+    path = _state_path(home)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f, indent=2)
+    os.replace(tmp, path)
+    return st
+
+
+def due(cfg: dict, home: str) -> tuple[bool, str]:
+    if not cfg.get("decode_auto"):
+        return False, "decode_auto is off"
+    days = float(cfg.get("decode_auto_days") or 14)
+    last = read_state(home).get("last_sweep")
+    if not last:
+        return True, "never run"
+    age = (time.time() - float(last)) / 86400.0
+    return age >= days, f"last run {age:.1f} d ago (every {days:g} d)"
+
+
+def choose(results: list[dict], current: str, margin: float = 0.10):
+    """Best profile, but only if it clearly beats the one in use.
+
+    A 10 % margin is deliberate: the sweep is synthetic, so a hair's-breadth
+    "win" is noise, and changing decode behaviour is not free.
+    """
+    ranked = score(results)
+    if not ranked:
+        return None, "no results"
+    best = ranked[0]
+    row = next((r for r in ranked if r["profile"] == current), None)
+    if row is None:
+        return best, f"{best['profile']} (current profile was not measured)"
+    if best["profile"] != current and best["score"] > row["score"] * (1.0 + margin):
+        gain = (best["score"] / row["score"] - 1.0) * 100 if row["score"] else 100.0
+        return best, f"{best['profile']} beats {current} by {gain:.0f}%"
+    return row, f"kept {current} (best was {best['profile']}, not clearly better)"
+
+
+def auto_sweep(cfg: dict, home: str, log=print):
+    """Sweep with the cable to itself, then keep the winner if it is clear.
+
+    Only safe before the decoders start: it plays the fixture into the cable,
+    so live audio and other consumers have to be out of the way.
+    """
+    loops = list(cfg.get("source_loops") or [])
+    state_file = os.path.join(home, "run", "pulse-modules.json")
+    try:
+        pulse.stop_source_loops(state_file=state_file)
+    except Exception:
+        pass
+    try:
+        levels = [float(x) for x in
+                  str(cfg.get("decode_auto_levels") or "-21").split(",")]
+        results = sweep(cfg, levels=tuple(levels), runs=1, log=log)
+    finally:
+        for src in loops:
+            try:
+                pulse.loop_source(src, state_file=state_file)
+            except Exception:
+                pass
+    current = current_profile(cfg)
+    best, why = choose(results, current)
+    write_state(home, last_sweep=time.time(), winner=best["profile"],
+                results=[{k: r.get(k) for k in ("profile", "decodes", "runs",
+                                                "rate", "cpu_pct", "score")}
+                         for r in score(results)],
+                applied=best["profile"] != current, note=why)
+    if best["profile"] != current:
+        apply_profile(cfg, best["profile"])
+        config.save(cfg)
+    log(f"tune: {why}")
+    return best, why
+
+
 def _free_port(start: int = 2460) -> int:
     for port in range(start, start + 40):
         with socket.socket() as s:
@@ -198,7 +303,7 @@ def sweep(cfg: dict, levels=(0, -14, -18), runs=2, profiles=None,
                             if frame.get("type") == "RX.DIRECTED" and \
                                     MARKER in str(frame.get("value", "")):
                                 decodes += 1
-                        log(f"  {level:+d} dB SNR: "
+                        log(f"  {level:+.0f} dB SNR: "
                             f"{'decoded' if decodes > before else 'no decode'}")
                 cpu = _cpu_seconds(dec.proc.pid) - cpu0
                 wall = max(0.001, time.time() - wall0)

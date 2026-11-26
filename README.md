@@ -115,9 +115,36 @@ paths use. This was exercised against real ALSA capture devices on this machine
 (mic reported −90 dBFS digital silence, as expected with nothing plugged in);
 an actual receiver feeding it remains untested.
 
-An RTL-SDR is not built yet (see FIXME.txt): the plan is `rtl_fm -M usb |
-pacat` into the cable, the same pattern morse-logger uses, plus a later band
-scan that steps the JS8 calling frequencies.
+### RTL-SDR
+
+A dongle needs nothing installed beyond the `rtl-sdr` package:
+
+    $ js8call-logger sdr --probe
+    No supported devices found.
+
+    $ js8call-logger sdr on --gain 49.6 --ppm 12
+    source: sdr  gain 49.6  ppm 12
+    restarting
+
+    $ js8call-logger sdr
+    source       sdr
+    rtl_fm       /usr/bin/rtl_fm
+    command      /usr/bin/rtl_fm -M usb -f 14078000 -s 240000 -r 48000 -l 0 -E direct2 -g 49.6 -
+
+`-E direct2` is added automatically below 24 MHz (HF needs direct sampling on
+the Q branch); above it the command is plain VHF/UHF FM style. The demodulator
+pipes into the cable, so `dial`, `level` and everything else keep working
+unchanged. It is supervised: if `rtl_fm` dies the daemon restarts it with a
+backoff, and the first failure is announced as an event.
+
+The one failure everyone hits is `No supported devices found` while the stick
+is plugged in. That is the kernel's DVB driver holding it, and the event says so:
+
+    # sdr stopped (no supported device: the kernel DVB driver is probably
+      holding it - sudo modprobe -r dvb_usb_rtl28xxu, and blacklist it ...)
+
+`--serial` picks a stick when several are plugged in. Band scan/hop is still
+FIXME, since it needs the receiver to be retunable.
 
 Install (offline)
 -----------------
@@ -247,6 +274,7 @@ Commands
 | `js8call-logger tune [--dial HZ] [--channel N]` | lower-level: dial and channel settings straight to one decoder |
 | `js8call-logger prune [--days N] [--dry-run] [--delete]` | archive (or delete) logs older than N days |
 | `js8call-logger migrate [--dry-run]` | fold legacy flat `GROUP*.txt` conversation files into `conversations/groups/` |
+| `js8call-logger sdr [on\|off] [--probe] [--gain G] [--ppm N] [--serial S]` | use an RTL-SDR as the input; `--probe` asks `rtl_test` what it sees |
 | `js8call-logger input [NAME] [--list] [--clear]` | choose the capture device the decoder listens to (a sound card, or the cable) |
 | `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
@@ -291,11 +319,15 @@ fault is worse than a noisy one:
 Identical events within ten minutes are not repeated. `"notify": false` drops
 the desktop part only.
 
-Two deliberate omissions. The decode-depth sweep is **not** run unattended:
-it needs the cable to itself and a quiet band, and a wrong verdict costs copy.
-`decode_auto` therefore only schedules a reminder. Band scan/hop is also not
-automatic; it needs an SDR that can retune, which the cable and WebSDR sources
-cannot.
+One deliberate omission. Band scan/hop is **not** automatic; it needs an SDR
+that can retune, which the cable and WebSDR sources cannot.
+
+The decode-depth sweep *is* automated — with `decode_auto` on it runs at the
+next start when one is due (every `decode_auto_days`, default 14). It runs
+before the decoders exist, pauses any source loops, and keeps the winner only
+if it beats the profile in use by 10 %, because the measurement is synthetic
+and a narrow win is noise. It skips itself when the input is a sound card
+rather than the cable, since it has no way to inject the fixture.
 
 Slow machines
 -------------

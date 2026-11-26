@@ -22,6 +22,11 @@ DEFAULTS = {
     # audio
     "cable": APP + "_cable",          # null sink; source is <cable>_src
     "input_device": None,             # None -> "<cable>_src"
+    "source": "cable",                # cable | sdr (rtl_fm -> pacat -> cable)
+    "rtl_gain": None,                 # rtl_fm -g (tenths of dB, "49.6")
+    "rtl_ppm": None,                  # rtl_fm -p
+    "rtl_serial": None,               # rtl_fm -d, when several sticks
+    "rtl_sample_rate": 240000,        # rtl_fm -s, decimated to -r cable_rate
     "cable_rate": 48000,
     "monitor": True,                  # hear the cable on the speakers
     "tap": False,                     # copy the speakers into the cable instead
@@ -67,6 +72,7 @@ DEFAULTS = {
     "prune_interval_h": 24,           # ... at most this often
     "decode_auto": False,             # re-sweep decode depth when due (see tune)
     "decode_auto_days": 14,           # ... at most this often
+    "decode_auto_levels": "-21",      # SNR(s) the automatic sweep uses
     # Refinement passes; false sets JS8_DISABLE_<NAME> for the decoder.
     "decode_env": {"deep_search": True, "ldpc_rescue": True,
                    "coherent_data": True, "redemod": True,

@@ -16,7 +16,8 @@ import sys
 import time
 
 from . import __version__
-from . import api, burst, clock, config, engine, migrate, pulse, records, retention, tune
+from . import (api, burst, clock, config, engine, migrate, pulse, records,
+               retention, sdr, tune)
 
 APP = config.APP
 _STOP = {"now": False}
@@ -133,6 +134,18 @@ def cmd_start(args):
             if pruned:
                 print("auto-prune: " + retention.summary_text(pruned).replace(
                     "\n", " | "), flush=True)
+            due_now, why = tune.due(cfg, p["home"])
+            if due_now:
+                if cfg.get("input_device"):
+                    print(f"tune: skipping the sweep ({why}) - the input is "
+                          f"{cfg['input_device']}, not the cable", flush=True)
+                else:
+                    print(f"tune: decode sweep due ({why}) - measuring now",
+                          flush=True)
+                    try:
+                        tune.auto_sweep(cfg, p["home"])
+                    except Exception as exc:   # never block a start over this
+                        print(f"tune: sweep failed: {exc}", flush=True)
         eng = engine.Engine(cfg)
         try:
             return eng.run()
@@ -226,6 +239,8 @@ def cmd_status(args):
         armed.append("cable")
     if cfg.get("prune_auto") and int(cfg.get("retention_days") or 0) > 0:
         armed.append("prune")
+    if cfg.get("decode_auto"):
+        armed.append("sweep")
     print(f"automatic    {', '.join(armed) if armed else 'none'}")
     if decode_sweep_due(cfg, p):
         print("             decode-depth re-sweep is due: tune --decoder --apply")
@@ -643,6 +658,48 @@ def cmd_dial(args):
     return 0
 
 
+def cmd_sdr(args):
+    """Use an RTL-SDR as the input: rtl_fm | pacat into the cable."""
+    p = config.ensure_dirs()
+    cfg = config.load();
+    changed = False
+    if args.gain is not None:
+        cfg["rtl_gain"] = args.gain
+        changed = True
+    if args.ppm is not None:
+        cfg["rtl_ppm"] = args.ppm
+        changed = True
+    if args.serial is not None:
+        cfg["rtl_serial"] = args.serial
+        changed = True
+    if args.state:
+        cfg["source"] = "sdr" if args.state == "on" else "cable"
+        changed = True
+    if changed:
+        config.save(cfg)
+        print(f"source: {cfg.get('source')}"
+              + (f"  gain {cfg['rtl_gain']}" if cfg.get("rtl_gain") else "")
+              + (f"  ppm {cfg['rtl_ppm']}" if cfg.get("rtl_ppm") else "")
+              + (f"  serial {cfg['rtl_serial']}" if cfg.get("rtl_serial") else ""))
+        if engine.read_pid(p) and engine._alive(engine.read_pid(p)):
+            print("restarting")
+            return cmd_restart(argparse.Namespace(foreground=False))
+        return 0
+    if args.probe:
+        print(sdr.probe())
+        return 0
+    print(f"source       {cfg.get('source')}")
+    print(f"rtl_fm       {sdr.binary() or 'not installed (rtl-sdr package)'}")
+    if (cfg.get("source") or "cable") == "sdr":
+        try:
+            print("command      " + " ".join(sdr.fm_command(cfg)))
+        except sdr.SdrError as exc:
+            print(f"command      cannot build it: {exc}")
+    else:
+        print("             turn it on with: js8call-logger sdr on")
+    return 0
+
+
 def cmd_input(args):
     """Show, choose or clear the capture device the decoder listens to."""
     p = config.ensure_dirs()
@@ -833,15 +890,7 @@ def cmd_prune(args):
 
 def decode_sweep_due(cfg: dict, p: dict) -> bool:
     """True when a decode-depth re-sweep is older than decode_auto_days."""
-    if not cfg.get("decode_auto"):
-        return False
-    try:
-        with open(os.path.join(p["run"], "decode-sweep.json"), encoding="utf-8") as f:
-            last = float(json.load(f).get("last") or 0)
-    except (OSError, ValueError):
-        return True
-    days = float(cfg.get("decode_auto_days") or 14)
-    return time.time() - last > days * 86400
+    return tune.due(cfg, p["home"])[0]
 
 
 def cmd_tune(args):
@@ -1051,6 +1100,12 @@ def cmd_doctor(args):
     if cfg.get("prune_auto") and int(cfg.get("retention_days") or 0) > 0:
         auto.append(f"prune {cfg['retention_days']} days old, at most every "
                     f"{cfg.get('prune_interval_h', 24)}h")
+    if cfg.get("decode_auto"):
+        st_tune, why_tune = tune.due(cfg, p["home"])
+        auto.append(f"decode sweep every {cfg.get('decode_auto_days', 14)}d "
+                    f"({why_tune})")
+    if (cfg.get("source") or "cable") == "sdr":
+        auto.append("rtl_fm supervised, restarted with backoff")
     if auto:
         for a in auto:
             note(a)
@@ -1313,6 +1368,14 @@ def build_parser():
     sp.add_argument("--force", action="store_true",
                     help="allow pruning while the logger is running")
     sp.set_defaults(func=cmd_prune)
+
+    sp = sub.add_parser("sdr", help="use an RTL-SDR as the input (rtl_fm | pacat)")
+    sp.add_argument("state", nargs="?", choices=["on", "off"])
+    sp.add_argument("--probe", action="store_true", help="ask rtl_test what it sees")
+    sp.add_argument("--gain", help="rtl_fm -g, e.g. 49.6")
+    sp.add_argument("--ppm", help="rtl_fm -p, frequency correction")
+    sp.add_argument("--serial", help="rtl_fm -d, when several sticks are plugged in")
+    sp.set_defaults(func=cmd_sdr)
 
     sp = sub.add_parser("input", help="show, choose or clear the capture device")
     sp.add_argument("device", nargs="?", help="capture source name, e.g. alsa_input.usb-...")
