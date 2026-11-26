@@ -58,6 +58,10 @@ DEFAULTS = {
     "watchdog_max_restarts": 4,       # give up after this many in a row
     "cable_watch": True,              # re-create the cable/loops if they vanish
     "cable_watch_interval_s": 30,
+    # intervals, all stretched by the measured CPU profile (see cpu.py)
+    "poll_interval_s": 0.05,
+    "route_interval_s": 3,
+    "status_interval_s": 5,
     "prune_auto": False,              # run prune at start when due
     "prune_interval_h": 24,           # ... at most this often
     "decode_auto": False,             # re-sweep decode depth when due (see tune)
@@ -105,14 +109,31 @@ def load(create: bool = True) -> dict:
             cfg.update(json.load(f))
     elif create:
         save(cfg, p)
+    # Measure the machine once, then scale the intervals - never the other way
+    # round. The scaled values are computed at read time (see scaled()) and are
+    # deliberately not written back, so a user who saves the config again does
+    # not multiply the scale into the stored numbers.
+    from . import cpu as _cpu
+    score, profile = _cpu.detect(p["home"])
+    cfg["_cpu_score"] = score
+    cfg["_cpu_profile"] = profile
+    cfg["_cpu_scale"] = _cpu.SCALES[profile]
     return cfg
 
 
+def scaled(cfg: dict, key: str, default):
+    """Effective value of an interval, stretched for a slow machine."""
+    return float(cfg.get(key) if cfg.get(key) is not None else default) * \
+        float(cfg.get("_cpu_scale") or 1.0)
+
+
 def save(cfg: dict, p: dict | None = None) -> None:
+    """Write the user's settings; runtime fields (leading _) never land here."""
     p = p or ensure_dirs()
     tmp = p["config"] + ".tmp"
+    clean = {k: v for k, v in cfg.items() if not k.startswith("_")}
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, sort_keys=True)
+        json.dump(clean, f, indent=2, sort_keys=True)
         f.write("\n")
     os.replace(tmp, p["config"])
 

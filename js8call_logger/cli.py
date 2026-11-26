@@ -210,6 +210,8 @@ def cmd_status(args):
     else:
         print(f"clock offset {off:+.2f}s from {samples} decodes")
     print(f"dial         {st.get('dial_hz', cfg.get('dial_hz'))} Hz")
+    print(f"cpu          {cfg.get('_cpu_profile')} ({cfg.get('_cpu_score')} s) "
+          f"intervals x{float(cfg.get('_cpu_scale') or 1):g}")
     print(f"api          {cfg.get('api_host')}:{cfg.get('api_port')}")
     armed = []
     if cfg.get("level_auto"):
@@ -819,7 +821,7 @@ def fmt_uptime(seconds) -> str:
     return f"{h}h{m:02d}m" if h else f"{m:02d}m{s % 60:02d}s"
 
 
-def cmd_doctor(_args):
+def cmd_doctor(args):
     """Report on the whole installation, like morse-logger's doctor.
 
     Sections matter: a flat list hides the difference between "the decoder is
@@ -829,6 +831,14 @@ def cmd_doctor(_args):
     p = config.ensure_dirs()
     cfg = config.load()
     print(f"{APP} {__version__}  home {p['home']}")
+    if getattr(args, "benchmark", False):
+        from . import cpu as _cpu
+        score, profile = _cpu.detect(p["home"], force=True)
+        print(f"benchmark    {score} s - profile {profile} (re-measured)")
+    prof = cfg.get("_cpu_profile")
+    print("\nMachine")
+    print(f"  [ok] cpu profile {prof} - benchmark {cfg.get('_cpu_score')} s, "
+          f"intervals x{float(cfg.get('_cpu_scale') or 1):g}")
     ok = True
 
     def chk(name, good, detail=""):
@@ -1252,6 +1262,8 @@ def build_parser():
     sp.set_defaults(func=cmd_clock)
 
     sp = sub.add_parser("doctor", help="check the environment")
+    sp.add_argument("--benchmark", action="store_true",
+                    help="re-measure the CPU and refresh the cached profile")
     sp.set_defaults(func=cmd_doctor)
 
     sp = sub.add_parser("selftest", help="check the log pipeline and decode a frame")

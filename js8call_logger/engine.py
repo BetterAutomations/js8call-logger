@@ -136,8 +136,8 @@ def watchdog_restart_due(now: float, started_at: float, last_decode: float | Non
     """
     if not cfg.get("watchdog", True):
         return False
-    silence = float(cfg.get("watchdog_silence_s", 300))
-    cooldown = float(cfg.get("watchdog_cooldown_s", 600))
+    silence = config.scaled(cfg, "watchdog_silence_s", 300)
+    cooldown = config.scaled(cfg, "watchdog_cooldown_s", 600)
     limit = int(cfg.get("watchdog_max_restarts", 4))
     if now - started_at < silence:
         return False
@@ -381,14 +381,14 @@ class Engine:
                 # the flag the loop restarts the same decoder a second time.
                 if not dec.alive() and not getattr(dec, "restarting", False):
                     self._restart(dec)
-            if time.time() - last_route > 3:
+            if time.time() - last_route > config.scaled(self.cfg, "route_interval_s", 3):
                 last_route = time.time()
                 self._route_watch()
             now = time.time()
-            if now - last_status > 5:
+            if now - last_status > config.scaled(self.cfg, "status_interval_s", 5):
                 last_status = now
                 self._write_runtime_status()
-            time.sleep(0.05)
+            time.sleep(config.scaled(self.cfg, "poll_interval_s", 0.05))
         self.shutdown()
         return 0
 
@@ -518,7 +518,7 @@ class Engine:
         and blocking the decode poll for that long would cost a slot.
         """
         while not self.stop_flag:
-            time.sleep(max(5.0, float(self.cfg.get("level_auto_interval_s") or 20)))
+            time.sleep(max(5.0, config.scaled(self.cfg, "level_auto_interval_s", 20)))
             if self.stop_flag:
                 break
             try:
@@ -567,7 +567,7 @@ class Engine:
         last_fire = 0.0
         fired = 0
         while not self.stop_flag:
-            time.sleep(max(10.0, float(self.cfg.get("cable_watch_interval_s") or 30)))
+            time.sleep(max(10.0, config.scaled(self.cfg, "cable_watch_interval_s", 30)))
             if self.stop_flag:
                 break
             try:
@@ -624,7 +624,7 @@ class Engine:
 
             if not self.cfg.get("watchdog", True):
                 continue
-            silence = float(self.cfg.get("watchdog_silence_s") or 300)
+            silence = config.scaled(self.cfg, "watchdog_silence_s", 300)
             if self.last_decode and now - self.last_decode < silence:
                 fired = 0
             try:

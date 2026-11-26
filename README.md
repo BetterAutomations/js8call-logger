@@ -262,6 +262,29 @@ it needs the cable to itself and a quiet band, and a wrong verdict costs copy.
 automatic; it needs an SDR that can retune, which the cable and WebSDR sources
 cannot.
 
+Slow machines
+-------------
+
+The intervals are not fixed: the CPU is measured once and the watchdogs stretch
+to fit it.
+
+    $ js8call-logger status | grep cpu
+    cpu          fast (0.0282 s) intervals x1
+
+- The measurement is a fixed integer loop, best of three, cached in
+  `run/cpu.json`. Model names lie - a throttled laptop or a VM reports the
+  rating of a CPU it is not actually running at - so the work is what gets
+  timed.
+- Under 0.055 s is `fast`; up to 0.100 s is `medium` (x2); slower is `slow`
+  (x4, where a 1.2 GHz Core 2 Duo SU9300 lands).
+- The scale stretches the watchdog silence and cooldown, the cable watch, the
+  route watch, level trimming, the status write and the decode poll. Nothing
+  else changes: the decoder is the expensive part, and it is not ours.
+- `js8call-logger doctor --benchmark` re-measures if the machine changed (a VM
+  moved host, a laptop started throttling).
+- The scale is applied when values are *read*, never written back, so saving
+  config.json cannot multiply it in twice. The stored numbers stay yours.
+
 Input level
 -----------
 
