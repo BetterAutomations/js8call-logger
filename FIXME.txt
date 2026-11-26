@@ -63,10 +63,7 @@ TEST FIXTURES
 - The 25 Nov WebSDR capture (7078 kHz, 69 min, 8 kHz mono) turned out to hold
   no decodable JS8 in its first 30 s: verified with a dedicated decoder on an
   otherwise silent cable, zero decodes. It is still useful as the busy-band
-  case (structure ratio 1.07, so clock bootstrap refuses). What is missing is
-  a real recording of traffic we know decoded - record from the 20 m feed
-  while the log is filling, then slice 30 s and add it as
-  selftest --recording --expect.
+  case (structure ratio 1.07, so clock bootstrap refuses), nothing more.
 
 REAL HARDWARE
 - The whole checklist lives in docs/HARDWARE-TESTING.md. Nothing in it has
