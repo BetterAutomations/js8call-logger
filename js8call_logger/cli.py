@@ -17,7 +17,7 @@ import sys
 import time
 
 from . import __version__
-from . import (api, burst, clock, config, engine, migrate, pulse, records,
+from . import (api, burst, clock, config, engine, feed, migrate, pulse, records,
                retention, scan, sdr, service, tune)
 
 APP = config.APP
@@ -241,6 +241,7 @@ def cmd_status(args):
     else:
         print(f"clock offset {off:+.2f}s from {samples} decodes")
     print(f"dial         {st.get('dial_hz', cfg.get('dial_hz'))} Hz")
+    print(f"input        {feed.describe(cfg)[0]}")
     print(f"cpu          {cfg.get('_cpu_profile')} ({cfg.get('_cpu_score')} s) "
           f"intervals x{float(cfg.get('_cpu_scale') or 1):g}")
     print(f"api          {cfg.get('api_host')}:{cfg.get('api_port')}")
@@ -849,13 +850,18 @@ def cmd_input(args):
     cfg = config.load()
     current = config.input_device(cfg)
 
-    if args.list or (args.device is None and not args.clear):
+    if args.list:
         for row in pulse.sources():
             name = row[1] if len(row) > 1 else row[0]
             print(f"{'*' if name == current else ' '} {name}")
-        if args.device is None and not args.list:
-            print(f"input: {current}"
-                  + ("" if cfg.get("input_device") else " (the cable)"))
+        return 0
+    if args.device is None and not args.clear:
+        # No argument means "what am I listening to", which is the question
+        # people actually have when the log stays empty.
+        summary, detail = feed.describe(cfg)
+        print(f"input    {summary}")
+        for line in detail:
+            print(line)
         return 0
 
     if args.clear:

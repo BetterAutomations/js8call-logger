@@ -172,6 +172,32 @@ def _module_blocks():
     return out
 
 
+def loopback_modules():
+    """[(module id, source, sink)] for every loaded module-loopback.
+
+    Reads the Argument line, which is where `pactl load-module` puts the
+    source and sink; a block without them (older module syntax) comes back with
+    None for that side rather than being guessed at.
+    """
+    out = []
+    for mid, block in _module_blocks():
+        if "module-loopback" not in block:
+            continue
+        src = sink = None
+        for line in block.splitlines():
+            line = line.strip()
+            if not line.startswith("Argument:"):
+                continue
+            for pair in line.split(":", 1)[1].split():
+                key, _, val = pair.partition("=")
+                if key == "source":
+                    src = val
+                elif key == "sink":
+                    sink = val
+        out.append((mid, src, sink))
+    return out
+
+
 def _monitor_active() -> bool:
     return any("module-loopback" in b and f"{SINK}.monitor" in b for _m, b in _module_blocks())
 

@@ -206,6 +206,37 @@ paths use. This was exercised against real ALSA capture devices on this machine
 (mic reported −90 dBFS digital silence, as expected with nothing plugged in);
 an actual receiver feeding it remains untested.
 
+### What is it listening to
+
+`input` with no argument answers the question that an empty log provokes, and
+`status` carries the same one-liner:
+
+    $ js8call-logger input
+    input    Google Chrome (browser) -> js8call-logger_cable
+    device   js8call-logger_cable_src (the cable)
+    stream   42  Google Chrome (browser)  "NA5B WebSDR"  -> js8call-logger_cable
+
+    $ js8call-logger input
+    input    RTL-SDR: rtl_fm (pid 390769) at 144.178 MHz USB
+    device   js8call-logger_cable_src (the cable)
+    rtl      pid 390769  /usr/bin/rtl_fm -M usb -f 144178000 -s 240000 -r 48000 -l 0 -g 40.2 -  (gain 40.2)
+
+The five answers it can give, all read from the sound server and `/proc`
+rather than from config.json — config says what was asked for, this says what
+is happening:
+
+    Google Chrome (browser) -> cable      a WebSDR tab, or any browser audio
+    VLC media player (player) -> cable    a file playing into the cable
+    HiFi__Line__source looped into cable  a hardware input via a loopback
+    RTL-SDR: rtl_fm (pid N) at X MHz USB  the stick, with where it is really tuned
+    cable: nothing feeding it             the case worth naming out loud
+
+Runs of several streams are counted rather than listed in the one-liner, and
+`doctor`'s "Audio into the cable" section measures the level of whatever this
+reports. A configured loop that is listed in `source_loops` but no longer
+exists is called out as `missing`, which is what a loop from another logger's
+cable looks like after that logger was removed.
+
 ### RTL-SDR
 
 A dongle needs nothing installed beyond the `rtl-sdr` package:
@@ -417,7 +448,7 @@ Commands
 | `js8call-logger start [-f]` | start in the background (`-f` stays in the foreground) |
 | `js8call-logger stop` | stop the logger and the decoder it owns |
 | `js8call-logger restart` | stop and start again, keeping the dial and settings |
-| `js8call-logger status [--json]` | service, decoders (one per channel), decodes, last decode, restarts, clock offset |
+| `js8call-logger status [--json]` | service, decoders (one per channel), decodes, last decode, restarts, clock offset, and what is feeding it |
 | `js8call-logger tail [-n N] [-f]` | read the text log; `-f` follows it |
 | `js8call-logger tail --json` | JSONL view with every field |
 | `js8call-logger tail --js8call-debug` | raw frames from the decoder's API, unfiltered |
@@ -430,7 +461,7 @@ Commands
 | `js8call-logger migrate [--dry-run]` | fold legacy flat `GROUP*.txt` conversation files into `conversations/groups/` |
 | `js8call-logger sdr [on\|off] [--probe] [--gain G] [--ppm N] [--serial S] [--bias-tee on\|off]` | use an RTL-SDR as the input; `--probe` asks `rtl_test` what it sees |
 | `js8call-logger scan [--dwell S] [--freqs LIST] [--apply] [--list]` | survey the JS8 calling frequencies and say which one is open |
-| `js8call-logger input [NAME] [--list] [--clear]` | choose the capture device the decoder listens to (a sound card, or the cable) |
+| `js8call-logger input [NAME] [--list] [--clear]` | with no argument, what the decoder is listening to right now (stick, browser tab, player, looped line-in, nothing); with a NAME, choose the capture device |
 | `js8call-logger level [--set] [--target DB] [--channel N] [--dry-run]` | measure the input level and trim the source volume toward the target |
 | `js8call-logger clock [--set] [--dry-run]` | report the measured offset, or move the system clock (needs root) |
 | `js8call-logger service [install\|remove\|status]` | systemd user unit so it starts at boot |
