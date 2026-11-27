@@ -436,7 +436,9 @@ The target is `level_target_db` in config.json (-14 dBFS by default).
 The trim is applied to the cable's *source* volume, which is the last stage
 before the decoder, so it is the right place to correct a hot feed and the
 wrong place to fix a quiet one: if the source application is already at 100%,
-`level` says so and you have to raise the volume there. Set `"level_auto": true`
+`level` says so and you have to raise the volume there. With an RTL-SDR feed
+there is no source application - only the tuner gain changes the level - so
+`level` names `rtl_gain` (`sdr --gain`) instead. Set `"level_auto": true`
 to have the daemon re-check every 20 seconds; it is off by default because
 changing a volume the user set is intrusive.
 

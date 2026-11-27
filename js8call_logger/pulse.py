@@ -456,15 +456,20 @@ def set_source_volume(name: str, percent: float) -> bool:
     return p.returncode == 0
 
 
-def trim_volume(measured_db: float, current_percent: float,
+def trim_volume(measured_db: float | None, current_percent: float | None,
                 target_db: float = -14.0, max_step_db: float = 6.0,
-                deadband_db: float = 2.0) -> dict:
+                deadband_db: float = 2.0,
+                at_full_hint: str = "raise the volume in the source application") -> dict:
     """Work out a new volume percentage to move a measured level toward target.
 
     Pure arithmetic, so it can be tested without a sound server. The measured
     level already includes the current volume, so the correction is a plain
     ratio in dB, capped at max_step_db so repeated calls converge instead of
     overshooting on a noisy measurement.
+
+    `at_full_hint` names the knob to turn when the volume is already at 100%:
+    there is no source application behind an rtl_fm feed, so the caller that
+    knows the source supplies the right advice.
     """
     if measured_db is None or current_percent is None:
         return {"action": "none", "percent": None, "delta_db": 0.0,
@@ -482,8 +487,8 @@ def trim_volume(measured_db: float, current_percent: float,
     clamped = max(0.0, min(100.0, percent))
     if abs(clamped - current_percent) < 1.0:
         return {"action": "none", "percent": current_percent, "delta_db": round(delta, 1),
-                "reason": ("already at 100% - raise the volume in the source "
-                           "application" if step > 0 else "already at 0%")}
+                "reason": (f"already at 100% - {at_full_hint}" if step > 0
+                           else "already at 0%")}
     return {"action": "raise" if step > 0 else "lower",
             "percent": round(clamped, 1), "delta_db": round(delta, 1),
             "reason": "outside tolerance"}

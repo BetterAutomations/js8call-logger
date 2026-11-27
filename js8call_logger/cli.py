@@ -897,7 +897,11 @@ def cmd_level(args):
               "fix the source, do not raise the volume")
         return 0
 
-    plan = pulse.trim_volume(db, vol, target_db=target, max_step_db=step_db)
+    plan = pulse.trim_volume(db, vol, target_db=target, max_step_db=step_db,
+                             at_full_hint=(
+                                 "raise rtl_gain - 'js8call-logger sdr --gain <dB>'"
+                                 if (cfg.get("source") or "cable") == "sdr"
+                                 else "raise the volume in the source application"))
     if plan["action"] == "none":
         print(f"  {plan['reason']}")
         return 0
@@ -1419,7 +1423,9 @@ def _last_text(p: dict, expect: str | None = None, tail: int = 25) -> str:
     except OSError:
         return ""
     best, best_ratio = "", -1.0
-    for line in texts[-tail:]:
+    # Newest first, so a tie (or no expectation at all) reports the latest
+    # record rather than the oldest one still inside the window.
+    for line in reversed(texts[-tail:]):
         try:
             text = json.loads(line).get("text") or ""
         except ValueError:

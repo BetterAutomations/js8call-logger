@@ -40,6 +40,15 @@ class TrimTest(unittest.TestCase):
         self.assertEqual(plan["action"], "none")
         self.assertIn("already at 100%", plan["reason"])
 
+    def test_full_volume_hint_comes_from_the_caller(self):
+        # An rtl_fm feed has no source application to turn up; the knob is the
+        # tuner gain, so the caller that knows the source names it.
+        plan = pulse.trim_volume(-60.0, 100.0, target_db=-14.0,
+                                 at_full_hint="raise rtl_gain")
+        self.assertEqual(plan["action"], "none")
+        self.assertIn("already at 100% - raise rtl_gain", plan["reason"])
+        self.assertNotIn("source application", plan["reason"])
+
     def test_never_goes_below_zero(self):
         plan = pulse.trim_volume(0.0, 1.0, target_db=-40.0)
         self.assertEqual(plan["action"], "none")
