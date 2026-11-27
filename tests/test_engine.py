@@ -2,13 +2,14 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from js8call_logger import config, engine, records  # noqa: E402
+from js8call_logger import cli, config, engine, records  # noqa: E402
 
 
 class PortTest(unittest.TestCase):
@@ -89,6 +90,60 @@ class SinkChannelTest(unittest.TestCase):
         db = sqlite3.connect(os.path.join(p["logs"], "js8call-logger.db"))
         self.assertEqual(db.execute("select channel from records").fetchone()[0], 2)
         db.close()
+
+
+class StatusErrorTest(unittest.TestCase):
+    """A failure must stop being reported once the daemon is healthy again.
+
+    status.json is merged rather than replaced, so an error written once used
+    to stay for the life of the file - and `start` would then report a failure
+    from the previous run while the service was coming up fine.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.p = {"run": self.tmp}
+
+    def _decoder(self, error=""):
+        class D:
+            last_error = error
+        return D()
+
+    def test_error_clears_when_a_later_write_says_so(self):
+        engine.write_status(self.p, running=False,
+                            error="decoder 1 exited with -15")
+        self.assertEqual(engine.read_status(self.p)["error"],
+                         "decoder 1 exited with -15")
+        engine.write_status(self.p, running=True, error="")
+        self.assertEqual(engine.read_status(self.p)["error"], "")
+
+    def test_a_healthy_decoder_reports_nothing(self):
+        self.assertEqual(engine.decoder_error([self._decoder()]), "")
+
+    def test_the_first_failure_is_the_one_reported(self):
+        decs = [self._decoder(), self._decoder("API did not come up")]
+        self.assertEqual(engine.decoder_error(decs), "API did not come up")
+
+
+class StatusStampTest(unittest.TestCase):
+    """`start` must be able to tell this launch's status from the last one's."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.p = {"run": self.tmp}
+
+    def test_missing_status_has_no_stamp(self):
+        self.assertEqual(cli._status_stamp(self.p), 0)
+
+    def test_a_rewrite_changes_the_stamp(self):
+        path = os.path.join(self.tmp, "status.json")
+        engine.write_status(self.p, running=False)
+        first = cli._status_stamp(self.p)
+        self.assertGreater(first, 0)
+        engine.write_status(self.p, running=True)
+        self.assertNotEqual(cli._status_stamp(self.p), first)
 
 
 if __name__ == "__main__":

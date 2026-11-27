@@ -119,6 +119,20 @@ def _rec_passes(rec: dict, args) -> bool:
 
 
 # -------------------------------------------------------------------- verbs
+def _status_stamp(p: dict) -> int:
+    """When run/status.json was last written, or 0 if there is none.
+
+    `start` polls that file for its verdict, and at the moment it launches the
+    file still holds whatever the last daemon left behind - running: false and
+    the error it died with. Comparing the stamp before and after the spawn
+    keeps a stale file from being read as this launch's result.
+    """
+    try:
+        return os.stat(os.path.join(p["run"], "status.json")).st_mtime_ns
+    except OSError:
+        return 0
+
+
 def cmd_start(args):
     cfg = config.load()
     quiet = bool(getattr(args, "quiet", False))
@@ -158,11 +172,14 @@ def cmd_start(args):
         say("already running")
         return 0
     log = open(os.path.join(p["run"], "daemon.log"), "ab", buffering=0)
+    before = _status_stamp(p)
     subprocess.Popen([sys.executable, "-m", "js8call_logger.cli", "start",
                       "--foreground"], stdout=log, stderr=log,
                      stdin=subprocess.DEVNULL, start_new_session=True)
     for _ in range(120):
         time.sleep(0.5)
+        if _status_stamp(p) == before:      # nothing from this launch yet
+            continue
         st = engine.read_status(p)
         if st.get("running"):
             say("started")

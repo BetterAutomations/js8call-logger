@@ -187,6 +187,17 @@ def read_status(p: dict) -> dict:
         return {}
 
 
+def decoder_error(decoders) -> str:
+    """The first decoder failure worth showing, or "" when all are healthy.
+
+    The status file is merged, not replaced, so an error written once would
+    stay there for the life of the file - across restarts that fixed it and
+    across daemon launches - and `start` would report a failure it no longer
+    has. Deriving it from the decoders each time is the only way it can clear.
+    """
+    return next((d.last_error for d in decoders if d.last_error), "")
+
+
 def read_pid(p: dict) -> int | None:
     try:
         with open(os.path.join(p["run"], "pid"), encoding="utf-8") as f:
@@ -374,7 +385,8 @@ class Engine:
             write_status(self.p, running=True, started_at=time.time(),
                          channels=len(self.decoders),
                          decoders=[d.describe() for d in self.decoders],
-                         decodes=0, restarts=0, clock_offset=0.0)
+                         decodes=0, restarts=0, clock_offset=0.0,
+                         error="")
         except Exception as exc:
             self.shutdown()
             write_status(self.p, running=False, error=str(exc))
@@ -679,6 +691,7 @@ class Engine:
                     dec.spawn()
                     dec.wait_api()
                     dec.api.set_freq(int(self.cfg["dial_hz"]), 1500)
+                    dec.last_error = ""      # it is up again; stop reporting it
                 except Exception as exc:         # keep trying on the next tick
                     dec.last_error = str(exc)
                     print(f"restart of decoder {dec.channel} failed: {exc}",
@@ -755,6 +768,7 @@ class Engine:
             last_event=getattr(self, "_last_event", None),
             last_event_s_ago=(round(time.time() - self._last_event_at)
                               if getattr(self, "_last_event_at", None) else None),
+            error=decoder_error(self.decoders),
         )
 
     def shutdown(self) -> None:
