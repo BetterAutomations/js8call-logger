@@ -1126,8 +1126,10 @@ def cmd_doctor(args):
         chk("js8call binary", True, engine.find_binary(cfg))
     except engine.EngineError as exc:
         chk("js8call binary", False, str(exc))
-    chk("pactl", shutil.which("pactl"), "pulseaudio-utils / pipewire-pulse")
-    chk("parec", shutil.which("parec"), "pulseaudio-utils / pipewire-pulse")
+    chk("pactl", shutil.which("pactl"),
+        "pulseaudio-utils / pipewire-pulse, or bundle/debs/<suite>")
+    chk("parec", shutil.which("parec"),
+        "pulseaudio-utils / pipewire-pulse, or bundle/debs/<suite>")
     chk("pacat", shutil.which("pacat"), "needed by selftest")
     chk("python", sys.version_info >= (3, 10), sys.version.split()[0])
     dev = config.input_device(cfg)
@@ -1608,7 +1610,7 @@ def build_parser():
     sp.add_argument("--ppm", help="rtl_fm -p, frequency correction")
     sp.add_argument("--serial", help="rtl_fm -d, when several sticks are plugged in")
     sp.add_argument("--bias-tee", dest="bias_tee", choices=["on", "off"],
-                    help="power the antenna port (12 V) for an LNA")
+                    help="power the bias tee on the antenna port, for an LNA")
     sp.set_defaults(func=cmd_sdr)
 
     sp = sub.add_parser("scan", help="survey the JS8 calling frequencies")

@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 bundle/JS8Call.AppImage
+bundle/debs/*/*.deb
 *.db
 *.jsonl
 

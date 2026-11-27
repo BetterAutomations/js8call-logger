@@ -38,7 +38,11 @@ def probe() -> str:
 
 
 def bias_tee(device: str | None, on: bool) -> tuple[bool, str]:
-    """Power the antenna port (12 V), or stop. Needs rtl_biast."""
+    """Power the bias tee on the antenna port, or stop. Needs rtl_biast.
+
+    The voltage is a property of the board (4.5 V on an RTL-SDR Blog V3, none
+    at all on most DVB-T dongles), not something this command sets.
+    """
     exe = shutil.which("rtl_biast")
     if not exe:
         return False, "rtl_biast is not installed (it ships with rtl-sdr)"

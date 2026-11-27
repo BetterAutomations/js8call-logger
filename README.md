@@ -5,7 +5,8 @@ js8call-logger — JS8 logger
   JS8 traffic.
 * Listens to an audio input, decodes every transmission in the passband and
   files it into timestamped logs.
-* Supports any audio source — WebSDR, a receiver's line out (RTL-SDR planned)
+* Supports any audio source — WebSDR, a receiver's line out, an RTL-SDR
+  (generic DVB-T dongle or RTL-SDR Blog V3) driven by `rtl_fm`
 * No GUI required: the decoder runs offscreen, on a machine with no display
 * Records every station at once — JS8Call decodes all offsets and all speeds
   simultaneously, so one cable hears the whole passband
@@ -43,6 +44,72 @@ frequency stamped on new lines.
 Everything lives in `~/js8call-logger` (config, `logs/`, `conversations/`,
 `run/`) unless the installer was told otherwise. `JS8CALL_LOGGER_HOME`
 overrides it.
+
+### Quick start with an RTL-SDR
+
+A generic DVB-T dongle and an RTL-SDR Blog V3 are the same chipset (RTL2832U
+plus an R820T2 tuner) and are driven identically by `rtl_fm`; nothing in the
+logger changes between them. What differs is the connector, whether there is a
+bias tee, and how good the reference crystal is - see the table below.
+
+    # 1. The utilities, unless rtl_test, pactl and parec already run
+    sudo dpkg -i bundle/debs/resolute/*.deb      # Xubuntu 26.04
+    sudo dpkg -i bundle/debs/stonking/*.deb      # Lubuntu 26.10
+
+    # 2. Take the stick back from the DVB TV driver that claims it at boot
+    sudo modprobe -r dvb_usb_rtl28xxu
+    echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/rtl-sdr.conf
+
+    # 3. Does the stick answer?
+    js8call-logger sdr --probe        # "Found 1 device(s)" ... Found Rafael R820T tuner
+
+    # 4. Tune it, feed the cable, log
+    js8call-logger dial 28.078        # 10 m JS8 calling frequency
+    js8call-logger sdr on --gain 40.2
+    js8call-logger start
+    js8call-logger level              # aim for -20 to -10 dBFS on a band with signals
+    js8call-logger tail -f            # Ctrl-C to stop watching, logging continues
+    js8call-logger stop
+
+Set the dial *before* `sdr on`: `rtl_fm` is started for whatever dial is
+configured, and changing it later restarts the tuner. `--gain`, `--ppm` and
+`--serial` are saved in `config.json` and applied at the next start.
+
+`level` on an empty band reads -35 to -20 dBFS: that is the band's noise floor,
+not a fault, and raising the gain will not conjure a signal. Watch the level
+when a band is live, and keep it under -10 dBFS so the tones do not flatten.
+
+| | generic DVB-T dongle | RTL-SDR Blog V3 |
+|---|---|---|
+| antenna connector | MCX or IEC, needs an adapter | SMA |
+| tuning range | 24-1766 MHz by tuner, below that by direct sampling | same |
+| reference crystal | plain crystal, often 20-50 ppm off | 1 ppm TCXO |
+| frequency correction | measure, then `--ppm N` | usually leave unset |
+| bias tee | none | 4.5 V on the SMA, `--bias-tee on` |
+| gain | 0-49.6 dB, start at 40.2 | same values |
+
+**Frequency error.** `rtl_test -p` for five minutes compares the stick with the
+system clock and prints a cumulative ppm; that is the number for `--ppm`. At
+28 MHz, 1 ppm is 28 Hz, so up to about 5 ppm needs no correction - the JS8
+passband is 2.5 kHz and a constant offset only moves a station's position in
+it. A 30 ppm dongle is 840 Hz off at 28 MHz and 13 kHz off at 70 cm, which does
+matter there. The generic stick used for testing here measured -3 ppm, so
+`--ppm` stayed unset.
+
+**Above and below 24 MHz.** 28 MHz sits above the tuner's direct-sampling
+threshold, so `--gain` works and nothing extra is passed. Below 24 MHz the
+logger adds `-E direct2` (Q branch) by itself; the tuner is then out of the
+circuit, so `--gain` has no effect and sensitivity is poor on both sticks - a
+long wire on 40 m works, a 2 m whip does not.
+
+**Bias tee.** Only the Blog V3 (and similar boards) has one, and it is 4.5 V,
+enough for a mast-head LNA - not a 12 V transverter. Use it only when you know
+the board has one: a stick without a tee cannot report that it is missing, so
+`--bias-tee on` may succeed and power nothing. `rtl_biast` comes from the same
+`rtl-sdr` package.
+
+**Clock.** The stick does not help here: JS8 still needs the computer clock
+within about two seconds, so check `timedatectl` before blaming the antenna.
 
 Getting good copy (decoding)
 ----------------------------
@@ -144,8 +211,10 @@ A strong signal the decoder cannot read scores zero, which is the point: the
 question is whether stations are readable, not whether the SDR sees energy.
 `--freqs 7.078,14.078` narrows it, and `--apply` leaves the dial on the winner.
 
-`--bias-tee on` powers a 12 V LNA on the antenna port (via `rtl_biast`) and is
-remembered for the next start; `--bias-tee off` removes it.
+`--bias-tee on` powers an LNA through the antenna port (via `rtl_biast`) and is
+remembered for the next start; `--bias-tee off` removes it. That is 4.5 V on an
+RTL-SDR Blog V3; a generic DVB-T dongle has no bias tee at all, and the stick
+cannot tell you so.
 
     $ js8call-logger sdr
     source       sdr
@@ -164,8 +233,9 @@ is plugged in. That is the kernel's DVB driver holding it, and the event says so
     # sdr stopped (no supported device: the kernel DVB driver is probably
       holding it - sudo modprobe -r dvb_usb_rtl28xxu, and blacklist it ...)
 
-`--serial` picks a stick when several are plugged in. Band scan/hop is still
-FIXME, since it needs the receiver to be retunable.
+`--serial` picks a stick when several are plugged in. `scan` retunes it across
+the calling frequencies and counts what decodes, which is the only "is this
+band open" answer that means anything for JS8 (see above).
 
 Install (offline)
 -----------------
@@ -186,6 +256,32 @@ The bundle is one file: `bundle/JS8Call.AppImage` (~59 MB, 3.0.3, checksum in
 `bundle/JS8Call.AppImage.sha256`). Refresh it on a connected machine with:
 
     ./refresh-bundle.sh /path/to/JS8Call-v3.0.3-x86_64.AppImage
+
+The program itself needs nothing else, but a stock flavour does not install the
+audio and SDR command-line tools, so they are carried too, one directory per
+Ubuntu release (they are built against that release's libc and will not mix):
+
+    bundle/debs/resolute/   21 packages, 5.7 MB - Ubuntu 26.04, so Xubuntu 26.04
+    bundle/debs/stonking/   21 packages, 5.7 MB - Ubuntu 26.10, so Lubuntu 26.10
+
+    sudo dpkg -i bundle/debs/resolute/*.deb      # on the air-gapped machine
+
+That is `pulseaudio-utils` (pactl, pacat, parec), `rtl-sdr` (rtl_fm, rtl_test,
+rtl_biast, rtl_power) and the non-base libraries they pull in (`libpulse0`,
+`librtlsdr0`, `libusb-1.0-0`, `libsndfile1` and friends). Packages every
+install already has - libc6, libgcc, libsystemd and the other required or
+important ones - are deliberately left out, so nothing can try to replace the
+running libc offline. `MANIFEST.txt` inside each directory lists every package
+with its version and priority; `SHA256SUMS` covers the debs.
+
+Refresh both directories on a connected machine with:
+
+    ./tools/fetch-offline-packages.sh resolute    # 26.04
+    ./tools/fetch-offline-packages.sh stonking    # 26.10
+
+The two names are Ubuntu's codenames; `lsb_release -cs` on the target prints
+the one it needs. `notify-send` is not in the bundle: it is optional, and the
+`libnotify-bin` package would drag in most of GTK for a one-line toast.
 
 `tests/fixtures/live-2026-11-26T1622Z-30s.wav` is 30 s of the live feed,
 captured while the log was filling and verified by replay (93 % of the expected
@@ -210,13 +306,15 @@ What is in the repository
     js8call-logger       launcher, for running from a checkout
     tests/               unit tests, the replay fixture, 30 s of real audio
     tools/audit_verbs.py every verb documented, no stale docs
+    tools/fetch-offline-packages.sh  downloads bundle/debs/<suite> for a release
     docs/DESIGN.md       decoder facts, API notes, why the pipeline looks like this
     docs/STATUS.md       what is built, and the evidence for each claim
     docs/HARDWARE-TESTS.md    the checklist for when a radio/dongle arrives
     FIXME.txt            features knowingly not built yet
     install.sh           offline installer (prompts for the data directory)
     refresh-bundle.sh    copies an AppImage into bundle/ and checksums it
-    bundle/              NOT in git: the 59 MB AppImage (the .sha256 is)
+    bundle/              NOT in git: the 59 MB AppImage and bundle/debs/
+                         (their .sha256 / SHA256SUMS are)
 
 Running from a checkout with no install needs nothing extra:
 
