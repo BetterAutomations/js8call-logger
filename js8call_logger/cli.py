@@ -904,14 +904,25 @@ def cmd_level(args):
         return 2
     db = pulse.peak_dbfs(sample)
     vol = pulse.source_volume(src)
-    verdict = ("too quiet" if db < -20 else "clipping" if db > -10
-               else "ok")
+    # The verdict describes the device actually measured: a chosen input_device
+    # wins over the sdr setting, exactly as it does in config.input_device().
+    sdr_feed = ((cfg.get("source") or "cable") == "sdr"
+                and not cfg.get("input_device"))
+    verdict = pulse.level_verdict(db, sdr=sdr_feed)
     print(f"level: {db} dBFS  volume {vol:.0f}%  target {target:g} dBFS  [{verdict}]"
           if vol is not None else
           f"level: {db} dBFS  volume unknown  target {target:g} dBFS  [{verdict}]")
     if db <= -80:
         print("  digital silence - the streams are open but delivering zeros; "
               "fix the source, do not raise the volume")
+        return 0
+    if sdr_feed and db < -20:
+        # Nothing to trim: the receive gain is the only knob, and on an empty
+        # band it cannot lift the reading to the -14 dBFS the target implies.
+        print("  that is an rtl_fm feed's noise floor, not a volume problem - "
+              "rtl_gain sets it, and it moves by a few dB, not fourteen")
+        print("  check the front end on a band with a carrier: tune a repeater "
+              "output and watch the level jump")
         return 0
 
     plan = pulse.trim_volume(db, vol, target_db=target, max_step_db=step_db,
@@ -1232,7 +1243,15 @@ def cmd_doctor(args):
                 db = pulse.peak_dbfs(sample)
                 vol = pulse.source_volume(config.input_device(cfg))
                 at = f" at volume {vol:.0f}%" if vol is not None else ""
-                if db < -30:
+                if db < -30 and ((cfg.get("source") or "cable") == "sdr"
+                                 and not cfg.get("input_device")):
+                    # Not a fault: with no volume stage, an empty band simply
+                    # reads low. Informational, not a warning.
+                    note(f"cable level {db} dBFS{at}",
+                         "no signal in the passband - an rtl_fm feed has no "
+                         "volume to raise; rtl_gain sets it, and an empty band "
+                         "reads like this")
+                elif db < -30:
                     warn(f"cable level {db} dBFS{at}", "far too quiet to decode; raise the "
                          f"volume (aim for -20 to -10 dBFS), or let it be trimmed: "
                          f"{APP} level --set")

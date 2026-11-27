@@ -456,6 +456,22 @@ def set_source_volume(name: str, percent: float) -> bool:
     return p.returncode == 0
 
 
+def level_verdict(db: float, sdr: bool = False) -> str:
+    """One word for the measured level.
+
+    A low reading means two different things. Behind a WebSDR or a line-in it
+    means the source volume is down, which the user can fix. Behind `rtl_fm`
+    there is no volume: the demodulator's output is proportional to what is in
+    the passband at a fixed gain, so a low peak is simply nothing being there -
+    an empty band, not a setting to correct.
+    """
+    if db < -20:
+        return "no signal in the passband" if sdr else "too quiet"
+    if db > -10:
+        return "clipping"
+    return "ok"
+
+
 def trim_volume(measured_db: float | None, current_percent: float | None,
                 target_db: float = -14.0, max_step_db: float = 6.0,
                 deadband_db: float = 2.0,

@@ -567,6 +567,11 @@ class Engine:
                 if not pulse.source_exists(src):
                     continue
                 db = pulse.peak_dbfs(pulse.capture_samples(1.0, rate=8000, source=src))
+                if (pulse.level_verdict(
+                        db, sdr=((self.cfg.get("source") or "cable") == "sdr"
+                                 and not self.cfg.get("input_device")))
+                        == "no signal in the passband"):
+                    continue      # an empty band is not a volume to trim
                 plan = pulse.trim_volume(db, pulse.source_volume(src),
                                          target_db=target, max_step_db=step)
                 if plan["action"] == "none":

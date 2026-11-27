@@ -75,9 +75,26 @@ Set the dial *before* `sdr on`: `rtl_fm` is started for whatever dial is
 configured, and changing it later restarts the tuner. `--gain`, `--ppm` and
 `--serial` are saved in `config.json` and applied at the next start.
 
-`level` on an empty band reads -35 to -20 dBFS: that is the band's noise floor,
-not a fault, and raising the gain will not conjure a signal. Watch the level
-when a band is live, and keep it under -10 dBFS so the tones do not flatten.
+`level` on an empty band reads -40 to -25 dBFS and reports `[no signal in the
+passband]`, not `[too quiet]`: behind `rtl_fm` there is no volume to be down, so
+a low peak means nothing is on frequency. Measured here at 144.178 MHz with a
+quiet band, gain against reading:
+
+    gain  0.0  -40.5 dBFS        gain 33.8  -35.5 dBFS
+    gain 16.6  -40.3             gain 40.2  -31.7   <- the example above
+    gain 28.0  -38.5             gain 49.6  -28.1   <- maximum
+
+-14 dBFS is a target for a feed that has a volume control: a WebSDR or a
+line-in. On a stick the receive gain is the only knob, it moves the reading by
+a few dB rather than fourteen, and on an empty band no setting reaches the
+target. Do not chase the number by pushing the cable's source volume past 100%:
+that lifts the reading and changes nothing about decoding, because the
+signal-to-noise ratio was fixed at the ADC. `level --set` refuses to go past
+100% for that reason.
+
+Watch the level only when something is transmitting, keep it under -10 dBFS so
+the tones do not flatten, and prove the front end on a band that has a carrier:
+tune a repeater output and the reading jumps to -20..-10 dBFS.
 
 | | generic DVB-T dongle | RTL-SDR Blog V3 |
 |---|---|---|
@@ -129,7 +146,9 @@ whole passband, and several stations at different offsets decode at once.
 
 **Level: aim for −20 to −10 dBFS.** JS8 tolerates a lot, but at 0 dBFS the
 tones flatten and the copy degrades. Back the WebSDR volume or the sound card
-gain off.
+gain off. On a stick there is no volume to back off and a quiet reading means
+an empty band rather than a fault - see the RTL-SDR quick start for the gain
+sweep and why the -14 dBFS target does not apply there.
 
 **No AGC, no noise reduction, no squelch.** AGC pumps between transmissions
 and noise reduction is tuned for speech; squelch cuts the quiet frames that
@@ -536,7 +555,8 @@ before the decoder, so it is the right place to correct a hot feed and the
 wrong place to fix a quiet one: if the source application is already at 100%,
 `level` says so and you have to raise the volume there. With an RTL-SDR feed
 there is no source application - only the tuner gain changes the level - so
-`level` names `rtl_gain` (`sdr --gain`) instead. Set `"level_auto": true`
+a low reading is reported as `[no signal in the passband]` and the advice names
+`rtl_gain` (`sdr --gain`), not a nonexistent volume. Set `"level_auto": true`
 to have the daemon re-check every 20 seconds; it is off by default because
 changing a volume the user set is intrusive.
 
