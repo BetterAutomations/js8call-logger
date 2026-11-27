@@ -83,15 +83,15 @@ while read -r line; do
 done < "$tmp/uris"
 
 ( cd "$out" && sha256sum ./*.deb > SHA256SUMS )
-# name  version  priority  one-line description, for a human reading the stick
-awk '/^Package:/ {p=$2; v=""; d=""}
-     /^Version:/ {v=$2}
-     /^Priority:/ {pr=$2}
-     /^Description-en:/ {sub(/^Description-en: /, ""); d=$0}
-     /^Description:/ {if (d == "") {sub(/^Description: /, ""); d=$0}}
-     p != "" && v != "" {print p"\t"v"\t"pr"\t"d; p=""; v=""; pr=""; d=""}' \
-    "$tmp/show" | awk -F'\t' 'NR==FNR {want[$1]=1; next} ($1 in want)' \
-    "$tmp/want" - | sort -u > "$out/MANIFEST.txt"
+# name  version  priority  one-line description, read back from the debs that
+# were actually downloaded - apt-cache also lists versions we did not take.
+for deb in "$out"/*.deb; do
+    printf '%s\t%s\t%s\t%s\n' \
+        "$(dpkg-deb -f "$deb" Package)" \
+        "$(dpkg-deb -f "$deb" Version)" \
+        "$(dpkg-deb -f "$deb" Priority)" \
+        "$(dpkg-deb -f "$deb" Description | head -n 1)"
+done | sort > "$out/MANIFEST.txt"
 
 echo
 echo "bundle/debs/$suite: $(ls "$out"/*.deb | wc -l) debs, $(du -sh "$out" | cut -f1)"

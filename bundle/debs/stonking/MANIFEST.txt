@@ -1,33 +1,21 @@
-libasyncns0	0.8-7	optional	
-libasyncns0	0.8-8	optional	
-libflac14	1.5.0+ds-5	optional	
-libmp3lame0	3.101~svn6525+dfsg-2ubuntu0.1	optional	
-libmp3lame0	4.0-1	optional	
-libmpg123-0t64	1.33.3-2	optional	
-libmpg123-0t64	1.33.7-1	optional	
-libogg0	1.3.6-2	optional	
-libopus0	1.6.1-1	optional	
-libpulse0	1:17.0+dfsg1-2ubuntu4	optional	
-libpulse0	1:17.0+dfsg1-2ubuntu6	optional	
-libpulsedsp	1:17.0+dfsg1-2ubuntu4	optional	
-libpulsedsp	1:17.0+dfsg1-2ubuntu6	optional	
-librtlsdr0	2.0.2-2build1	optional	
-librtlsdr0	2.0.3-1	optional	
-libsndfile1	1.2.2-4	optional	
-libusb-1.0-0	2:1.0.29-2build1	optional	
-libusb-1.0-0	2:1.0.30-1	standard	
-libvorbis0a	1.3.7-3build2	optional	
-libvorbisenc2	1.3.7-3build2	optional	
-libx11-6	2:1.8.13-1	standard	
-libx11-6	2:1.8.13-1ubuntu0.1	optional	
-libx11-data	2:1.8.13-1	standard	
-libx11-data	2:1.8.13-1ubuntu0.1	optional	
-libx11-xcb1	2:1.8.13-1	optional	
-libx11-xcb1	2:1.8.13-1ubuntu0.1	optional	
-libxau6	1:1.0.11-1build2	standard	
-libxcb1	1.17.0-2ubuntu1	standard	
-libxdmcp6	1:1.1.5-2	standard	
-pulseaudio-utils	1:17.0+dfsg1-2ubuntu4	optional	
-pulseaudio-utils	1:17.0+dfsg1-2ubuntu6	optional	
-rtl-sdr	2.0.2-2build1	optional	
-rtl-sdr	2.0.3-1	extra	
+libasyncns0	0.8-8	optional	Asynchronous name service query library
+libflac14	1.5.0+ds-5	optional	Free Lossless Audio Codec - runtime C library
+libmp3lame0	4.0-1	optional	MP3 encoding library
+libmpg123-0t64	1.33.7-1	optional	MPEG layer 1/2/3 audio decoder (shared library)
+libogg0	1.3.6-2	optional	Ogg bitstream library
+libopus0	1.6.1-1	optional	Opus codec runtime library
+libpulse0	1:17.0+dfsg1-2ubuntu6	optional	PulseAudio client libraries
+libpulsedsp	1:17.0+dfsg1-2ubuntu6	optional	PulseAudio OSS pre-load library
+librtlsdr0	2.0.3-1	optional	Software defined radio receiver for Realtek RTL2832U (library)
+libsndfile1	1.2.2-4	optional	Library for reading/writing audio files
+libusb-1.0-0	2:1.0.30-1	optional	userspace USB programming library
+libvorbis0a	1.3.7-3build2	optional	decoder library for Vorbis General Audio Compression Codec
+libvorbisenc2	1.3.7-3build2	optional	encoder library for Vorbis General Audio Compression Codec
+libx11-6	2:1.8.13-1	optional	X11 client-side library
+libx11-data	2:1.8.13-1	optional	X11 client-side library
+libx11-xcb1	2:1.8.13-1	optional	Xlib/XCB interface library
+libxau6	1:1.0.11-1build2	optional	X11 authorisation library
+libxcb1	1.17.0-2ubuntu1	optional	X C Binding
+libxdmcp6	1:1.1.5-2	optional	X11 Display Manager Control Protocol library
+pulseaudio-utils	1:17.0+dfsg1-2ubuntu6	optional	Command line tools for the PulseAudio sound server
+rtl-sdr	2.0.3-1	optional	Software defined radio receiver for Realtek RTL2832U (tools)
