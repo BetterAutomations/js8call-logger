@@ -119,6 +119,25 @@ logger adds `-E direct2` (Q branch) by itself; the tuner is then out of the
 circuit, so `--gain` has no effect and sensitivity is poor on both sticks - a
 long wire on 40 m works, a 2 m whip does not.
 
+**Is the HF input really wired?** `Enabled direct sampling mode, input 2/Q` is a
+register write: it says the software asked, not that RF from the connector
+reaches the ADC. Plenty of dongles are software-capable and electrically not.
+This settles it, using your hand as the signal generator and the tuner path as
+a control:
+
+    $ ./tools/hf-input-test.sh
+    HF path (direct sampling)  -42.2 dB before, -42.2 dB touching  (+0.0)
+    control (tuner path)       -24.3 dB before, -10.8 dB touching  (+13.5)
+
+    PASS          both paths jump: the HF input is wired, so a quiet band is
+                  the antenna or the band
+    FAIL          only the tuner jumps: the Q branch is not connected on this
+                  board, and no antenna will help below 24 MHz
+    INCONCLUSIVE  neither jumps: the pin was not touched, or the antenna port
+                  is not connected to anything
+
+The logger is stopped for the ~50 seconds it runs and started again after.
+
 **Bias tee.** Only the Blog V3 (and similar boards) has one, and it is 4.5 V,
 enough for a mast-head LNA - not a 12 V transverter. Use it only when you know
 the board has one: a stick without a tee cannot report that it is missing, so
